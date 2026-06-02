@@ -313,7 +313,10 @@ LuxInline void accumulate_shadow_debug_aov(const Scene& scene, const CpuBvh& bvh
     SceneTriangle source_triangle = scene_triangle_view(scene, source_hit.triangle_id);
     int source_material_id = source_triangle.material_id;
     const Material& source_material = scene.materials[source_material_id];
-    if (!has_direct_lighting_lobe(source_material)) return;
+    if (!source_material.is_scattering()
+        || !has_direct_lighting_lobe(source_material)) {
+        return;
+    }
 
     SurfaceInteraction interaction = make_surface_interaction(
         source_hit.position, source_hit.ng, source_hit.ns, -camera_ray.direction);
@@ -350,6 +353,36 @@ LuxInline void accumulate_shadow_debug_aov(const Scene& scene, const CpuBvh& bvh
         shadow.opaque_hit.v, shadow.passthrough_hits);
 }
 
+LuxInline bool find_shadow_debug_source_hit(const Scene& scene, const CpuBvh& bvh,
+                                            const Ray& camera_ray,
+                                            const SurfaceHit& first_hit,
+                                            int max_depth,
+                                            SurfaceHit& source_hit) {
+    Ray ray = camera_ray;
+    SurfaceHit hit = first_hit;
+    vec3 transmittance(1);
+
+    for (int step = 0; step < max_depth; ++step) {
+        SceneTriangle scene_triangle = scene_triangle_view(scene, hit.triangle_id);
+        const Material& material = scene.materials[scene_triangle.material_id];
+        if (!is_passthrough_material(material)) {
+            if (!material.is_scattering()) return false;
+            source_hit = hit;
+            return true;
+        }
+
+        transmittance = apply_passthrough(transmittance, material);
+        if (max_component(transmittance) <= 0) return false;
+
+        ray = spawn_passthrough_ray(hit.position, ray.direction);
+        if (!intersect_scene_bvh(scene, bvh, ray, hit)) {
+            return false;
+        }
+    }
+
+    return false;
+}
+
 LuxInline void accumulate_cpu_aovs(const Scene& scene, const CpuBvh& bvh,
                                    const SceneLightSampler& lights,
                                    const Ray& camera_ray, SamplerState& debug_sampler,
@@ -375,8 +408,14 @@ LuxInline void accumulate_cpu_aovs(const Scene& scene, const CpuBvh& bvh,
             primary_normal_debug_color(scene, hit, true);
     }
     if (targets.shadow_debug && max_depth > 0) {
+        SurfaceHit shadow_source_hit;
+        if (!find_shadow_debug_source_hit(
+                scene, bvh, camera_ray, hit, max_depth, shadow_source_hit)) {
+            return;
+        }
         accumulate_shadow_debug_aov(
-            scene, bvh, lights, hit, camera_ray, debug_sampler, *targets.shadow_debug, pixel);
+            scene, bvh, lights, shadow_source_hit, camera_ray, debug_sampler,
+            *targets.shadow_debug, pixel);
     }
 }
 
