@@ -87,9 +87,21 @@ LuxDeviceInline ShadowRayWorkItem make_shadow_work_item_li(
         const vec3& contribution) {
     vec3 shadow_origin = offset_ray_origin_along_normal(
         position, interaction.ng, direct.wi);
-    Float shadow_tmax = light.distance < INFINITY
-        ? fmaxf(kRayEpsilon, light.distance - kRayEpsilon)
-        : INFINITY;
+    vec3 shadow_dir = direct.wi;
+    Float shadow_tmax = INFINITY;
+    vec3 shadow_contribution = contribution;
+    if (light.distance < INFINITY) {
+        shadow_dir = light.position - shadow_origin;
+        Float shadow_dist = length(shadow_dir);
+        if (shadow_dist <= kRayEpsilon) {
+            shadow_contribution = vec3(0);
+            shadow_dir = direct.wi;
+            shadow_tmax = kRayEpsilon;
+        } else {
+            shadow_dir = shadow_dir / shadow_dist;
+            shadow_tmax = shadow_dist - kRayEpsilon;
+        }
+    }
 
     return ShadowRayWorkItem{
         path_id,
@@ -97,8 +109,8 @@ LuxDeviceInline ShadowRayWorkItem make_shadow_work_item_li(
         primitive_ref,
         material_id,
         depth,
-        Ray(shadow_origin, direct.wi, kRayEpsilon, shadow_tmax),
-        contribution,
+        Ray(shadow_origin, shadow_dir, kRayEpsilon, shadow_tmax),
+        shadow_contribution,
         interaction.ng,
         interaction.ns,
         direct.pdf_light_solid_angle,

@@ -88,15 +88,19 @@ LuxDeviceInline LightLiSample sample_light_li(GpuScene scene,
     if (!sampled.valid) return li;
 
     if (sampled.light.kind == LightKind::DiffuseArea) {
-        GpuSceneTriangle light_triangle = gpu_scene_triangle(
-            scene, sampled.light.area.primitive_ref);
+        PrimitiveRef primitive_ref = sampled.light.area.primitive_ref;
+        if (!primitive_ref_valid(primitive_ref)
+            && sampled.light.area.primitive_id >= 0
+            && sampled.light.area.primitive_id < gpu_scene_triangle_count(scene)) {
+            primitive_ref = gpu_scene_primitive_ref(
+                scene, sampled.light.area.primitive_id);
+        }
+        GpuSceneTriangle light_triangle = gpu_scene_triangle(scene, primitive_ref);
         if (!light_triangle.valid) return li;
-        int light_triangle_id = sampled.light.area.primitive_id >= 0
-            ? sampled.light.area.primitive_id
-            : gpu_scene_primitive_index(scene, sampled.light.area.primitive_ref);
+        int light_triangle_id = gpu_scene_primitive_index(scene, primitive_ref);
         LightSample area_sample;
         area_sample.triangle_id = light_triangle_id;
-        area_sample.primitive_ref = sampled.light.area.primitive_ref;
+        area_sample.primitive_ref = primitive_ref;
         area_sample.position = sample_triangle_area(light_triangle.triangle, light_u);
         area_sample.normal = triangle_normal(light_triangle.triangle);
         vec2 bary_uv = sample_triangle_barycentric_uv(light_u);
