@@ -65,11 +65,9 @@ void WavefrontPathTracer::render(const PreparedScene& scene, Film& film,
     int batch_size = std::min(image_size, settings.batch_size);
 
     Film* shadow_debug = outputs ? outputs->get(RenderAov::ShadowDebug) : nullptr;
-    Film* primary_debug = outputs ? outputs->get(RenderAov::PrimaryDebug) : nullptr;
     Film* normal_debug = outputs ? outputs->get(RenderAov::GeometricNormal) : nullptr;
     Film* shading_normal_debug = outputs ? outputs->get(RenderAov::ShadingNormal) : nullptr;
     validate_aov_film(shadow_debug, film, "shadow debug");
-    validate_aov_film(primary_debug, film, "primary debug");
     validate_aov_film(normal_debug, film, "geometric normal");
     validate_aov_film(shading_normal_debug, film, "shading normal");
 
@@ -77,7 +75,6 @@ void WavefrontPathTracer::render(const PreparedScene& scene, Film& film,
     runtime_options.image_size = image_size;
     runtime_options.batch_size = batch_size;
     runtime_options.enable_shadow_debug = shadow_debug != nullptr;
-    runtime_options.enable_primary_debug = primary_debug != nullptr;
     runtime_options.enable_normal_debug = normal_debug != nullptr;
     runtime_options.enable_shading_normal_debug = shading_normal_debug != nullptr;
     runtime_options.enable_path_log = outputs && outputs->wants_path_log();

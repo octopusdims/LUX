@@ -11,9 +11,8 @@ bool run_cpu_diagnostic_request(const Scene& scene, const CpuBvh& bvh,
                                 int width, int height,
                                 const RenderSettings& settings,
                                 const DebugRequest& request) {
-    if (request.probe_mode == DebugProbeMode::Primary
-        || request.probe_mode == DebugProbeMode::Peel) {
-        lux_cpu_diagnostics_detail::print_primary_or_peel_probe(
+    if (request.probe_mode == DebugProbeMode::CameraHits) {
+        lux_cpu_diagnostics_detail::print_camera_hits_probe(
             scene, bvh, camera, width, height, settings, request);
         return true;
     }

@@ -2,13 +2,12 @@
 
 namespace lux_cpu_diagnostics_detail {
 
-void print_primary_or_peel_probe(const Scene& scene, const CpuBvh& bvh,
-                                 const Camera& camera,
-                                 int width, int height,
-                                 const RenderSettings& settings,
-                                 const DebugRequest& request) {
-    const char* label = request.probe_mode == DebugProbeMode::Peel
-        ? "peel probe" : "primary probe";
+void print_camera_hits_probe(const Scene& scene, const CpuBvh& bvh,
+                             const Camera& camera,
+                             int width, int height,
+                             const RenderSettings& settings,
+                             const DebugRequest& request) {
+    const char* label = "camera-hits probe";
     if (!validate_debug_pixel(request.pixel_x, request.pixel_y, width, height, label)) {
         throw std::runtime_error(std::string(label) + " pixel is outside the image");
     }
@@ -29,53 +28,50 @@ void print_primary_or_peel_probe(const Scene& scene, const CpuBvh& bvh,
                     double(camera_ray.origin.z), double(camera_ray.direction.x),
                     double(camera_ray.direction.y), double(camera_ray.direction.z));
 
-        std::vector<PrimaryProbeHit> hits = collect_primary_hits_bruteforce(scene, camera_ray);
+        std::vector<CameraHitProbeHit> hits = collect_camera_hits_bruteforce(
+            scene, camera_ray);
         SurfaceHit bvh_hit;
         bool stack_overflow = false;
         bool bvh_found = intersect_scene_bvh(scene, bvh, camera_ray, bvh_hit, &stack_overflow);
 
-        if (request.probe_mode == DebugProbeMode::Peel) {
-            int front_count = 0;
-            int back_count = 0;
-            int first_front = -1;
-            int first_back = -1;
-            int first_material_id = hits.empty()
-                ? -1 : scene_triangle_view(scene, hits[0].triangle_id).material_id;
-            int same_material_front_count = 0;
-            int same_material_back_count = 0;
-            int first_same_material_front = -1;
-            int first_same_material_back = -1;
-            for (int i = 0; i < static_cast<int>(hits.size()); ++i) {
-                SceneTriangle scene_triangle = scene_triangle_view(scene, hits[i].triangle_id);
-                vec3 raw_ng = triangle_normal(scene_triangle.triangle);
-                bool front = dot(raw_ng, camera_ray.direction) < 0;
-                bool same_material = scene_triangle.material_id == first_material_id;
-                if (front) {
-                    ++front_count;
-                    if (first_front < 0) first_front = i;
-                    if (same_material) {
-                        ++same_material_front_count;
-                        if (first_same_material_front < 0) first_same_material_front = i;
-                    }
-                } else {
-                    ++back_count;
-                    if (first_back < 0) first_back = i;
-                    if (same_material) {
-                        ++same_material_back_count;
-                        if (first_same_material_back < 0) first_same_material_back = i;
-                    }
+        int front_count = 0;
+        int back_count = 0;
+        int first_front = -1;
+        int first_back = -1;
+        int first_material_id = hits.empty()
+            ? -1 : scene_triangle_view(scene, hits[0].triangle_id).material_id;
+        int same_material_front_count = 0;
+        int same_material_back_count = 0;
+        int first_same_material_front = -1;
+        int first_same_material_back = -1;
+        for (int i = 0; i < static_cast<int>(hits.size()); ++i) {
+            SceneTriangle scene_triangle = scene_triangle_view(scene, hits[i].triangle_id);
+            vec3 raw_ng = triangle_normal(scene_triangle.triangle);
+            bool front = dot(raw_ng, camera_ray.direction) < 0;
+            bool same_material = scene_triangle.material_id == first_material_id;
+            if (front) {
+                ++front_count;
+                if (first_front < 0) first_front = i;
+                if (same_material) {
+                    ++same_material_front_count;
+                    if (first_same_material_front < 0) first_same_material_front = i;
+                }
+            } else {
+                ++back_count;
+                if (first_back < 0) first_back = i;
+                if (same_material) {
+                    ++same_material_back_count;
+                    if (first_same_material_back < 0) first_same_material_back = i;
                 }
             }
-
-            std::printf("  hits=%zu front=%d back=%d first_front=%d first_back=%d\n",
-                        hits.size(), front_count, back_count, first_front, first_back);
-            std::printf("  first_hit_material=%d same_mat_front=%d same_mat_back=%d "
-                        "first_same_mat_front=%d first_same_mat_back=%d\n",
-                        first_material_id, same_material_front_count, same_material_back_count,
-                        first_same_material_front, first_same_material_back);
-        } else {
-            std::printf("  bruteforce_hits=%zu\n", hits.size());
         }
+
+        std::printf("  hits=%zu front=%d back=%d first_front=%d first_back=%d\n",
+                    hits.size(), front_count, back_count, first_front, first_back);
+        std::printf("  first_hit_material=%d same_mat_front=%d same_mat_back=%d "
+                    "first_same_mat_front=%d first_same_mat_back=%d\n",
+                    first_material_id, same_material_front_count, same_material_back_count,
+                    first_same_material_front, first_same_material_back);
 
         if (stack_overflow) {
             std::printf("  cpu_bvh: stack_overflow\n");
@@ -94,11 +90,13 @@ void print_primary_or_peel_probe(const Scene& scene, const CpuBvh& bvh,
             std::printf("  nearest_compare: %s\n", match ? "match" : "mismatch");
         }
 
-        int printed_hits = request.probe_mode == DebugProbeMode::Peel
-            ? std::min(request.max_hits, static_cast<int>(hits.size()))
-            : std::min(8, static_cast<int>(hits.size()));
+        int printed_hits = std::min(request.max_hits, static_cast<int>(hits.size()));
         for (int i = 0; i < printed_hits; ++i) {
-            print_primary_probe_hit(scene, camera_ray, hits[i], i);
+            print_camera_hit_probe_hit(scene, camera_ray, hits[i], i);
+        }
+        if (printed_hits < static_cast<int>(hits.size())) {
+            std::printf("  truncated_hits=%zu (increase -debug-max-hits to print more)\n",
+                        hits.size() - static_cast<size_t>(printed_hits));
         }
     }
 }

@@ -56,13 +56,6 @@ void WavefrontRuntime::clear_frame_outputs(const WavefrontRuntimeOptions& option
         shadow_debug_pixels.clear();
     }
 
-    if (options.enable_primary_debug) {
-        primary_debug_pixels.resize(options.image_size);
-        thrust::fill(primary_debug_pixels.begin(), primary_debug_pixels.end(), vec3(0));
-    } else {
-        primary_debug_pixels.clear();
-    }
-
     if (options.enable_normal_debug) {
         normal_debug_pixels.resize(options.image_size);
         thrust::fill(normal_debug_pixels.begin(), normal_debug_pixels.end(), vec3(0));
@@ -138,11 +131,6 @@ vec3* WavefrontRuntime::shadow_debug_pixels_ptr() {
     return thrust::raw_pointer_cast(shadow_debug_pixels.data());
 }
 
-vec3* WavefrontRuntime::primary_debug_pixels_ptr() {
-    if (primary_debug_pixels.empty()) return nullptr;
-    return thrust::raw_pointer_cast(primary_debug_pixels.data());
-}
-
 vec3* WavefrontRuntime::normal_debug_pixels_ptr() {
     if (normal_debug_pixels.empty()) return nullptr;
     return thrust::raw_pointer_cast(normal_debug_pixels.data());
@@ -156,7 +144,6 @@ vec3* WavefrontRuntime::shading_normal_debug_pixels_ptr() {
 WavefrontDebugViews WavefrontRuntime::debug_views() {
     return WavefrontDebugViews{
         shadow_debug_pixels_ptr(),
-        primary_debug_pixels_ptr(),
         normal_debug_pixels_ptr(),
         shading_normal_debug_pixels_ptr()
     };
@@ -174,12 +161,6 @@ void WavefrontRuntime::download_outputs(Film& film, RenderOutputs* outputs) cons
     if (shadow_debug) {
         thrust::copy(shadow_debug_pixels.begin(), shadow_debug_pixels.end(),
                      shadow_debug->pixels.begin());
-    }
-
-    Film* primary_debug = outputs ? outputs->get(RenderAov::PrimaryDebug) : nullptr;
-    if (primary_debug) {
-        thrust::copy(primary_debug_pixels.begin(), primary_debug_pixels.end(),
-                     primary_debug->pixels.begin());
     }
 
     Film* normal_debug = outputs ? outputs->get(RenderAov::GeometricNormal) : nullptr;

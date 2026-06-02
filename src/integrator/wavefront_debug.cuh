@@ -12,7 +12,6 @@
 
 struct WavefrontDebugViews {
     vec3* shadow = nullptr;
-    vec3* primary = nullptr;
     vec3* geometric_normal = nullptr;
     vec3* shading_normal = nullptr;
 };
@@ -88,30 +87,6 @@ LuxDeviceInline vec3 shadow_debug_classification_color(
     }
 
     return vec3(0, 1, 0);
-}
-
-LuxDeviceInline vec3 primary_debug_classification_color(
-        GpuScene scene,
-        PrimitiveRef primitive_ref,
-        int primitive_id,
-        const Ray& ray) {
-    if (primitive_id < 0) {
-        return vec3(0);
-    }
-
-    GpuSceneTriangle triangle = gpu_scene_triangle(scene, primitive_ref);
-    int material_id = triangle.material_id;
-    if (!triangle.valid || material_id < 0 || material_id >= scene.material_count) {
-        return vec3(0);
-    }
-    const Material& material = scene.materials[material_id];
-    if (material.is_emissive()) {
-        return vec3(1, 1, 0);
-    }
-
-    vec3 ng = triangle_normal(triangle.triangle);
-    Float ng_wo = dot(ng, -ray.direction);
-    return ng_wo < 0 ? vec3(1, 0, 1) : vec3(0, 1, 1);
 }
 
 LuxDeviceInline vec3 encode_normal_color(const vec3& normal) {

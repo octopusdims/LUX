@@ -42,7 +42,6 @@ LuxHDInline SamplerState make_render_sampler(const RenderSettings& settings,
 
 enum class RenderAov {
     ShadowDebug = 0,
-    PrimaryDebug,
     GeometricNormal,
     ShadingNormal,
     Count

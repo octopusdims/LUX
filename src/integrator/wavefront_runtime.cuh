@@ -19,7 +19,6 @@ struct WavefrontRuntimeOptions {
     int image_size = 0;
     int batch_size = 0;
     bool enable_shadow_debug = false;
-    bool enable_primary_debug = false;
     bool enable_normal_debug = false;
     bool enable_shading_normal_debug = false;
     bool enable_path_log = false;
@@ -42,7 +41,6 @@ struct WavefrontRuntime {
 
     thrust::device_vector<vec3> output_pixels;
     thrust::device_vector<vec3> shadow_debug_pixels;
-    thrust::device_vector<vec3> primary_debug_pixels;
     thrust::device_vector<vec3> normal_debug_pixels;
     thrust::device_vector<vec3> shading_normal_debug_pixels;
     PathLogStorage path_log;
@@ -62,7 +60,6 @@ struct WavefrontRuntime {
 
     vec3* output_pixels_ptr();
     vec3* shadow_debug_pixels_ptr();
-    vec3* primary_debug_pixels_ptr();
     vec3* normal_debug_pixels_ptr();
     vec3* shading_normal_debug_pixels_ptr();
 

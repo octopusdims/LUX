@@ -157,12 +157,11 @@ LuxInline vec3 estimate_direct_light(const Scene& scene, const CpuBvh& bvh,
 
 struct CpuAovTargets {
     Film* shadow_debug = nullptr;
-    Film* primary_debug = nullptr;
     Film* geometric_normal = nullptr;
     Film* shading_normal = nullptr;
 
     bool enabled() const {
-        return shadow_debug || primary_debug || geometric_normal || shading_normal;
+        return shadow_debug || geometric_normal || shading_normal;
     }
 };
 
@@ -182,22 +181,16 @@ LuxInline CpuAovTargets make_cpu_aov_targets(RenderOutputs* outputs,
     if (!outputs) return targets;
 
     targets.shadow_debug = outputs->get(RenderAov::ShadowDebug);
-    targets.primary_debug = outputs->get(RenderAov::PrimaryDebug);
     targets.geometric_normal = outputs->get(RenderAov::GeometricNormal);
     targets.shading_normal = outputs->get(RenderAov::ShadingNormal);
 
     validate_aov_film(targets.shadow_debug, beauty, "shadow debug");
-    validate_aov_film(targets.primary_debug, beauty, "primary debug");
     validate_aov_film(targets.geometric_normal, beauty, "geometric normal");
     validate_aov_film(targets.shading_normal, beauty, "shading normal");
 
     if (targets.shadow_debug) {
         std::fill(targets.shadow_debug->pixels.begin(),
                   targets.shadow_debug->pixels.end(), vec3(0));
-    }
-    if (targets.primary_debug) {
-        std::fill(targets.primary_debug->pixels.begin(),
-                  targets.primary_debug->pixels.end(), vec3(0));
     }
     if (targets.geometric_normal) {
         std::fill(targets.geometric_normal->pixels.begin(),
@@ -226,20 +219,6 @@ LuxInline bool is_near_boundary_edge(const SceneTriangle& triangle, Float u, Flo
     bool near_v2_v0 = (triangle.boundary_edges & 4u) != 0
         && u <= kBoundaryBarycentricEpsilon;
     return near_v0_v1 || near_v1_v2 || near_v2_v0;
-}
-
-LuxInline vec3 primary_debug_classification_color(const Scene& scene,
-                                                  const SurfaceHit& hit,
-                                                  const Ray& ray) {
-    if (hit.triangle_id < 0) return vec3(0);
-    SceneTriangle scene_triangle = scene_triangle_view(scene, hit.triangle_id);
-    const Material& material = scene.materials[scene_triangle.material_id];
-    if (material.is_emissive()) {
-        return vec3(1, 1, 0);
-    }
-
-    Float ng_wo = dot(triangle_normal(scene_triangle.triangle), -ray.direction);
-    return ng_wo < 0 ? vec3(1, 0, 1) : vec3(0, 1, 1);
 }
 
 LuxInline vec3 primary_normal_debug_color(const Scene& scene,
@@ -395,10 +374,6 @@ LuxInline void accumulate_cpu_aovs(const Scene& scene, const CpuBvh& bvh,
         return;
     }
 
-    if (targets.primary_debug) {
-        (*targets.primary_debug)[pixel] +=
-            primary_debug_classification_color(scene, hit, camera_ray);
-    }
     if (targets.geometric_normal) {
         (*targets.geometric_normal)[pixel] +=
             primary_normal_debug_color(scene, hit, false);

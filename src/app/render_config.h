@@ -81,12 +81,8 @@ LuxInline bool parse_string_value(int argc, char** argv, int& index, std::string
 }
 
 LuxInline bool parse_debug_probe_mode(const char* text, DebugProbeMode& mode) {
-    if (std::strcmp(text, "primary") == 0) {
-        mode = DebugProbeMode::Primary;
-        return true;
-    }
-    if (std::strcmp(text, "peel") == 0) {
-        mode = DebugProbeMode::Peel;
+    if (std::strcmp(text, "camera-hits") == 0) {
+        mode = DebugProbeMode::CameraHits;
         return true;
     }
     if (std::strcmp(text, "path") == 0) {
@@ -107,10 +103,6 @@ LuxInline bool add_debug_aov_mode(const char* text, unsigned& mask) {
     }
     if (std::strcmp(text, "shadow") == 0) {
         mask |= DebugAovShadow;
-        return true;
-    }
-    if (std::strcmp(text, "primary") == 0) {
-        mask |= DebugAovPrimary;
         return true;
     }
     if (std::strcmp(text, "ng") == 0) {
@@ -255,7 +247,7 @@ LuxInline bool parse_render_config(int argc, char** argv, RenderConfig& config) 
             }
             config.debug.has_probe_pixel = true;
             if (config.debug.probe_mode == DebugProbeMode::None) {
-                config.debug.probe_mode = DebugProbeMode::Primary;
+                config.debug.probe_mode = DebugProbeMode::CameraHits;
             }
             continue;
         }
@@ -354,11 +346,11 @@ LuxInline void print_render_usage(const char* executable, const char* scene_name
     std::printf("  -gpu                Use GPU wavefront path tracer\n");
     std::printf("  -time               Print stage timing breakdown\n");
     std::printf("  -debug-probe X Y    Select a pixel for probe modes\n");
-    std::printf("  -debug-mode mode    Probe mode: primary, peel, path, or nee\n");
+    std::printf("  -debug-mode mode    Probe mode: camera-hits, path, or nee\n");
     std::printf("  -debug-samples N    Set sample count for probe commands\n");
-    std::printf("  -debug-max-hits N   Set max printed hits for peel probe\n");
-    std::printf("  -debug-aov list     AOV list: orientation, shadow, primary, ng, ns\n");
-    std::printf("                       Example: -debug-aov ng,ns,primary\n");
+    std::printf("  -debug-max-hits N   Set max printed hits for camera-hits probe\n");
+    std::printf("  -debug-aov list     AOV list: orientation, shadow, ng, ns\n");
+    std::printf("                       Example: -debug-aov ng,ns,shadow\n");
     std::printf("  -debug-output path  Override debug AOV output prefix\n");
     std::printf("  -debug-mesh mode    Mesh mode: orientation-audit or winding\n");
     std::printf("  -debug-triangle N   Triangle id for winding mesh debug\n");

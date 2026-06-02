@@ -59,7 +59,7 @@ void write_orientation_debug_image(const Scene& scene, const CpuBvh& bvh,
     }
 
     write_debug_pixels(output_path, pixels, width, height, 1);
-    std::printf("Wrote %s (CPU primary-hit orientation AOV, target material %d)\n",
+    std::printf("Wrote %s (CPU orientation AOV, target material %d)\n",
                 output_path.c_str(), target_material);
     std::printf("  colors: grey=normal target, red=inward radial, blue=backface, "
                 "magenta=inward+backface, dark grey=other, yellow=light\n");

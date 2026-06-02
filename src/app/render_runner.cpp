@@ -407,24 +407,18 @@ int run_render(const RenderConfig& config) {
 
     Film beauty(config.width, config.height, config.samples_per_pixel);
     Film shadow_debug_film;
-    Film primary_debug_film;
     Film normal_debug_film;
     Film shading_normal_debug_film;
     RenderOutputs render_outputs;
     bool enable_shadow_aov = (render_aov_mask & DebugAovShadow) != 0;
-    bool enable_primary_aov = (render_aov_mask & DebugAovPrimary) != 0;
     bool enable_ng_aov = (render_aov_mask & DebugAovNg) != 0;
     bool enable_ns_aov = (render_aov_mask & DebugAovNs) != 0;
-    bool enable_render_aov = enable_shadow_aov || enable_primary_aov
-        || enable_ng_aov || enable_ns_aov;
+    bool enable_render_aov = enable_shadow_aov || enable_ng_aov || enable_ns_aov;
     allocate_if_enabled(enable_shadow_aov, shadow_debug_film, config);
-    allocate_if_enabled(enable_primary_aov, primary_debug_film, config);
     allocate_if_enabled(enable_ng_aov, normal_debug_film, config);
     allocate_if_enabled(enable_ns_aov, shading_normal_debug_film, config);
     render_outputs.set(RenderAov::ShadowDebug,
                        enable_shadow_aov ? &shadow_debug_film : nullptr);
-    render_outputs.set(RenderAov::PrimaryDebug,
-                       enable_primary_aov ? &primary_debug_film : nullptr);
     render_outputs.set(RenderAov::GeometricNormal,
                        enable_ng_aov ? &normal_debug_film : nullptr);
     render_outputs.set(RenderAov::ShadingNormal,
@@ -464,12 +458,6 @@ int run_render(const RenderConfig& config) {
             std::string path = debug_aov_output_path(debug_request.output_path, DebugAovShadow);
             write_debug_pixels(path, shadow_debug_film);
             std::printf("Wrote %s (%s shadow classification AOV)\n",
-                        path.c_str(), backend_label);
-        }
-        if (enable_primary_aov) {
-            std::string path = debug_aov_output_path(debug_request.output_path, DebugAovPrimary);
-            write_debug_pixels(path, primary_debug_film);
-            std::printf("Wrote %s (%s primary-hit classification AOV)\n",
                         path.c_str(), backend_label);
         }
         if (enable_ng_aov) {

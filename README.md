@@ -120,7 +120,7 @@ Defaults:
 Pixel probes:
 
 ```bash
-./build/src/app/lux -scene cornell -debug-probe 128 128 -debug-mode primary
+./build/src/app/lux -scene cornell -debug-probe 128 128 -debug-mode camera-hits
 ./build/src/app/lux -scene cornell -debug-probe 128 128 -debug-mode path -debug-samples 16
 ./build/src/app/lux -scene cornell -debug-probe 128 128 -debug-mode nee
 ```
@@ -128,14 +128,14 @@ Pixel probes:
 Debug AOVs:
 
 ```bash
-./build/src/app/lux -scene bunny -debug-aov ng,ns,primary -debug-output out/debug/bunny.ppm
+./build/src/app/lux -scene bunny -debug-aov ng,ns,shadow -debug-output out/debug/bunny.ppm
 ./build/src/app/lux -gpu -scene bunny -debug-aov shadow,ng,ns -out bunny_debug
 ```
 
 Supported AOV names:
 
 ```text
-orientation, shadow, primary, ng, ns
+orientation, shadow, ng, ns
 ```
 
 Mesh diagnostics:

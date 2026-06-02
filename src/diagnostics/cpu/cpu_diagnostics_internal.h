@@ -251,23 +251,23 @@ std::vector<Float> compute_radial_orientation_scores(
     return scores;
 }
 
-struct PrimaryProbeHit {
+struct CameraHitProbeHit {
     int triangle_id = -1;
     Float t = std::numeric_limits<Float>::infinity();
     Float u = 0;
     Float v = 0;
 };
 
-std::vector<PrimaryProbeHit> collect_primary_hits_bruteforce(const Scene& scene,
-                                                             const Ray& ray) {
-    std::vector<PrimaryProbeHit> hits;
+std::vector<CameraHitProbeHit> collect_camera_hits_bruteforce(const Scene& scene,
+                                                              const Ray& ray) {
+    std::vector<CameraHitProbeHit> hits;
     for (int i = 0; i < scene_triangle_count(scene); ++i) {
         Float t, u, v;
         if (!intersect_triangle(ray, scene_triangle_geometry(scene, i), t, u, v)) continue;
-        hits.push_back(PrimaryProbeHit{i, t, u, v});
+        hits.push_back(CameraHitProbeHit{i, t, u, v});
     }
-    std::sort(hits.begin(), hits.end(), [](const PrimaryProbeHit& a,
-                                           const PrimaryProbeHit& b) {
+    std::sort(hits.begin(), hits.end(), [](const CameraHitProbeHit& a,
+                                           const CameraHitProbeHit& b) {
         return a.t < b.t;
     });
     return hits;
@@ -455,8 +455,8 @@ void print_shadow_hit_result(const char* label, const Scene& scene,
                 near_boundary ? 1 : 0, shared_vertices, result.passthrough_hits);
 }
 
-void print_primary_probe_hit(const Scene& scene, const Ray& camera_ray,
-                             const PrimaryProbeHit& hit, int rank) {
+void print_camera_hit_probe_hit(const Scene& scene, const Ray& camera_ray,
+                                const CameraHitProbeHit& hit, int rank) {
     SceneTriangle scene_triangle = scene_triangle_view(scene, hit.triangle_id);
     vec3 raw_ng = triangle_normal(scene_triangle.triangle);
     vec3 raw_ns = interpolate_triangle_normal(scene_triangle, hit.u, hit.v);
@@ -512,11 +512,11 @@ Ray sample_camera_probe_ray(const Camera& camera, int width, int height,
 
 } // namespace
 
-void print_primary_or_peel_probe(const Scene& scene, const CpuBvh& bvh,
-                                 const Camera& camera,
-                                 int width, int height,
-                                 const RenderSettings& settings,
-                                 const DebugRequest& request);
+void print_camera_hits_probe(const Scene& scene, const CpuBvh& bvh,
+                             const Camera& camera,
+                             int width, int height,
+                             const RenderSettings& settings,
+                             const DebugRequest& request);
 void print_path_probe(const Scene& scene, const CpuBvh& bvh,
                       const SceneLightSampler& lights, const Camera& camera,
                       int width, int height, const RenderSettings& settings,

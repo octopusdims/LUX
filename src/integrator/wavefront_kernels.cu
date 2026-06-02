@@ -281,7 +281,7 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
     int path_id = item.path_id;
     const Ray& ray = item.ray;
 
-    if ((debug.primary || debug.geometric_normal || debug.shading_normal)
+    if ((debug.geometric_normal || debug.shading_normal)
         && paths.depth[path_id] == 0
         && paths.passthrough_depth[path_id] == 0) {
         int debug_primitive_id;
@@ -292,10 +292,6 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
             debug_hit_u, debug_hit_v);
         int pixel = paths.pixel_index[path_id];
         int debug_id = debug_found ? debug_primitive_id : -1;
-        if (debug.primary) {
-            debug.primary[pixel] += lux_wavefront_debug::primary_debug_classification_color(
-                scene, debug_primitive_ref, debug_id, ray);
-        }
         if (debug.geometric_normal) {
             debug.geometric_normal[pixel] += lux_wavefront_debug::primary_normal_debug_color(
                 scene, debug_primitive_ref, debug_id, debug_hit_u, debug_hit_v, false);

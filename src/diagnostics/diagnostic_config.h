@@ -7,8 +7,7 @@
 
 enum class DebugProbeMode {
     None,
-    Primary,
-    Peel,
+    CameraHits,
     Path,
     Nee,
 };
@@ -16,16 +15,14 @@ enum class DebugProbeMode {
 enum DebugAovMask : unsigned {
     DebugAovOrientation = 1u << 0,
     DebugAovShadow = 1u << 1,
-    DebugAovPrimary = 1u << 2,
-    DebugAovNg = 1u << 3,
-    DebugAovNs = 1u << 4,
+    DebugAovNg = 1u << 2,
+    DebugAovNs = 1u << 3,
 };
 
 inline const char* debug_aov_name(DebugAovMask mask) {
     switch (mask) {
         case DebugAovOrientation: return "orientation";
         case DebugAovShadow: return "shadow";
-        case DebugAovPrimary: return "primary";
         case DebugAovNg: return "ng";
         case DebugAovNs: return "ns";
     }
