@@ -128,28 +128,30 @@ LuxInline vec3 estimate_direct_light(const Scene& scene, const CpuBvh& bvh,
         return vec3(0);
     }
 
-        LightSampleContext ctx{interaction.position, interaction.ng, interaction.ns};
-        LightLiSample light = sample_light_li(
-            lights, ctx, sampler_get_1d(sampler), sampler_get_1d(sampler),
-            sampler_get_2d(sampler));
-        if (!light.valid) {
-            return vec3(0);
-        }
+    LightSampleContext ctx{interaction.position, interaction.ng, interaction.ns};
+    Float light_select_u = sampler_get_1d(sampler);
+    Float light_component_u = sampler_get_1d(sampler);
+    vec2 light_u = sampler_get_2d(sampler);
+    LightLiSample light = sample_light_li(
+        lights, ctx, light_select_u, light_component_u, light_u);
+    if (!light.valid) {
+        return vec3(0);
+    }
 
-        DirectLightEstimate estimate =
-            estimate_unoccluded_direct_light_li(material, interaction, light);
-        if (!estimate.valid) return vec3(0);
+    DirectLightEstimate estimate =
+        estimate_unoccluded_direct_light_li(material, interaction, light);
+    if (!estimate.valid) return vec3(0);
 
-        vec3 shadow_origin = offset_ray_origin_along_normal(
-            interaction.position, interaction.ng, estimate.wi);
-        ShadowTraceResult shadow = light.distance < INFINITY
-            ? trace_shadow(scene, bvh, shadow_origin, light.position, source_primitive)
-            : trace_shadow_ray(
-                scene, bvh, Ray(shadow_origin, estimate.wi, kRayEpsilon),
-                source_primitive);
-        if (max_component(shadow.transmittance) <= 0) {
-            return vec3(0);
-        }
+    vec3 shadow_origin = offset_ray_origin_along_normal(
+        interaction.position, interaction.ng, estimate.wi);
+    ShadowTraceResult shadow = light.distance < INFINITY
+        ? trace_shadow(scene, bvh, shadow_origin, light.position, source_primitive)
+        : trace_shadow_ray(
+            scene, bvh, Ray(shadow_origin, estimate.wi, kRayEpsilon),
+            source_primitive);
+    if (max_component(shadow.transmittance) <= 0) {
+        return vec3(0);
+    }
 
     Float mis_weight = direct_light_mis_weight(estimate);
     return estimate.contribution * shadow.transmittance * mis_weight;
@@ -300,9 +302,11 @@ LuxInline void accumulate_shadow_debug_aov(const Scene& scene, const CpuBvh& bvh
     SurfaceInteraction interaction = make_surface_interaction(
         source_hit.position, source_hit.ng, source_hit.ns, -camera_ray.direction);
     LightSampleContext ctx{interaction.position, interaction.ng, interaction.ns};
+    Float light_select_u = sampler_get_1d(sampler);
+    Float light_component_u = sampler_get_1d(sampler);
+    vec2 light_u = sampler_get_2d(sampler);
     LightLiSample light = sample_light_li(
-        lights, ctx, sampler_get_1d(sampler), sampler_get_1d(sampler),
-        sampler_get_2d(sampler));
+        lights, ctx, light_select_u, light_component_u, light_u);
     if (!light.valid) {
         return;
     }

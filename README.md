@@ -16,7 +16,7 @@ algorithms and validation rather than engine-level infrastructure.
 - Materials: Lambert, thin Lambert, GGX, dielectric glass, pbrt-style null
   interfaces, and tinted pass-through filters.
 - Built-in scenes: Cornell box, direct-light test, transparent-filter test,
-  Stanford bunny, and Stanford dragon.
+  Stanford bunny, Stanford dragon, and a LUX logo cover scene.
 - OBJ loading through the bundled tinyobjloader source.
 - PPM output with tone mapping and gamma correction.
 - PFM output for linear HDR data.
@@ -102,7 +102,7 @@ Common options:
 | `-height N` | Set image height. |
 | `-spp N` | Set samples per pixel. |
 | `-depth N` | Set maximum path depth. |
-| `-scene name` | Select `cornell`, `direct-light`, `transparent-filter`, `bunny`, or `dragon`. |
+| `-scene name` | Select `cornell`, `direct-light`, `transparent-filter`, `bunny`, `dragon`, or `lux-cover`. |
 | `-out name` | Write to `out/name/name.ppm`. |
 | `-output path` | Write to an exact `.ppm` or `.pfm` path. |
 | `-gpu` | Use the CUDA wavefront path tracer. |
@@ -159,12 +159,61 @@ assets/models/
 Expected filenames:
 
 ```text
+assets/models/LUX.obj
 assets/models/stanford-bunny.obj
 assets/models/dragon.obj
 ```
 
 CMake copies `assets/` next to the `lux` executable after building so the
 runtime relative paths continue to resolve from the build tree.
+
+### OBJ Loading Contract
+
+The OBJ loader is intentionally small and explicit:
+
+- Geometry is parsed with the bundled tinyobjloader source and triangulated on
+  import.
+- `mtllib` is ignored for now. Materials are either a generated default
+  Lambert material or explicit `usemtl` name bindings supplied through
+  `ObjLoadOptions::material_bindings`.
+- Explicit material bindings that do not match any `usemtl` tag are reported as
+  warnings.
+- `ObjNormalMode::SourceOrGeometry` uses OBJ `vn` records when present and
+  falls back to geometric face normals otherwise.
+- `ObjNormalMode::GenerateMissingSmooth` computes area-weighted smooth vertex
+  normals for vertices without source normals.
+- `ObjNormalMode::FaceOnly` ignores source normals and renders with geometric
+  face normals.
+- `ObjLoadOptions::reverse_orientation=true` reverses imported triangle
+  winding and flips imported or generated vertex normals.
+- Faces that reference non-finite `v` positions are skipped and reported.
+- Invalid or non-finite `vn` / `vt` references are reported, then treated as
+  missing normals or zero UVs.
+- Zero-length `vn` records are reported and treated as missing normals, so
+  `ObjNormalMode::GenerateMissingSmooth` can repair them.
+- OBJ `vt` coordinates are preserved by default; set
+  `ObjLoadOptions::flip_texcoord_v=true` to import V as `1 - v` for assets
+  authored with an inverted texture-space convention.
+- Boundary edge detection can use source OBJ vertex ids or welded positions via
+  `ObjBoundaryTopology`.
+- `ObjLoadOptions::position_weld_epsilon` must be finite and positive when an
+  active boundary/cap topology uses welded positions.
+- `ObjLoadOptions::object_to_world` is stored on the created scene instance;
+  imported mesh vertices remain in OBJ/object space.
+- When the loader creates an instance, `object_to_world.m` and
+  `object_to_world.inv` must be finite, affine-invertible, and mutually
+  consistent; active placement targets must also be finite.
+- Instance transforms preserve normal/geometry orientation consistency for
+  mirrored or negative-determinant transforms.
+- `ObjLoadOptions::placement` can fit the created instance to a target X extent
+  or maximum extent, center it in XZ, and ground it to a target Y without
+  modifying mesh vertices.
+- `ObjLoadOptions::create_instance=false` imports only the mesh asset so callers
+  can create one or more instances manually; placement is only applied when the
+  loader creates an instance.
+- `ObjLoadResult` reports material mappings, mesh/group ranges, warnings,
+  boundary/cap diagnostics, and source/final mesh-size statistics plus source,
+  mesh, and world bounds.
 
 ## Repository Layout
 

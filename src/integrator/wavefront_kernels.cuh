@@ -48,9 +48,9 @@ void launch_trace_shadow_rays(WavefrontRuntime& runtime,
                               WavefrontDebugViews debug,
                               int batch_size);
 
-void launch_accumulate_terminated_paths(WavefrontRuntime& runtime,
-                                        PathStateView paths,
-                                        int batch_size);
+void launch_flush_batch_paths(WavefrontRuntime& runtime,
+                              PathStateView paths,
+                              int batch_size);
 
 void launch_clear_bounce_queues(WavefrontRuntime& runtime);
 

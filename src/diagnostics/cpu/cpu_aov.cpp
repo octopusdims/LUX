@@ -43,9 +43,11 @@ void write_orientation_debug_image(const Scene& scene, const CpuBvh& bvh,
             int pixel_index = y * width + x;
             SamplerState sampler = make_render_sampler(settings, pixel_index, 0);
             CameraSample camera_sample;
+            Float film_u = sampler_get_1d(sampler);
+            Float film_v = sampler_get_1d(sampler);
             camera_sample.p_film = vec2(
-                (Float(x) + sampler_get_1d(sampler)) / Float(width),
-                (Float(height - 1 - y) + sampler_get_1d(sampler)) / Float(height));
+                (Float(x) + film_u) / Float(width),
+                (Float(height - 1 - y) + film_v) / Float(height));
             camera_sample.p_lens = sampler_get_2d(sampler);
             camera_sample.time = sampler_get_1d(sampler);
             Ray ray = generate_camera_ray(camera, camera_sample).ray;

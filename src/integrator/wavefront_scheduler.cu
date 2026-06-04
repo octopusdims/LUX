@@ -56,9 +56,9 @@ void trace_shadow_stage(WavefrontRuntime& runtime,
         context.current_batch);
 }
 
-void accumulate_stage(WavefrontRuntime& runtime,
-                      const WavefrontFrameContext& context) {
-    launch_accumulate_terminated_paths(runtime, context.paths, context.current_batch);
+void flush_batch_stage(WavefrontRuntime& runtime,
+                       const WavefrontFrameContext& context) {
+    launch_flush_batch_paths(runtime, context.paths, context.current_batch);
 }
 
 void clear_and_swap_stage(WavefrontRuntime& runtime) {
@@ -109,11 +109,11 @@ void WavefrontRuntime::render_baseline_path_tracing(
                 intersect_stage(*this, context);
                 shade_baseline_stage(*this, context, wavefront_depth);
                 trace_shadow_stage(*this, context);
-                accumulate_stage(*this, context);
                 if (wavefront_depth < settings.max_depth) {
                     clear_and_swap_stage(*this);
                 }
             }
+            flush_batch_stage(*this, context);
 
             synchronize_cuda_or_throw("render batch");
             check_queue_overflows();

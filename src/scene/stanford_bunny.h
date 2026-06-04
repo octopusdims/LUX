@@ -3,9 +3,7 @@
 #ifndef LUX_SCENE_STANFORD_BUNNY_H
 #define LUX_SCENE_STANFORD_BUNNY_H
 
-#include <algorithm>
 #include <filesystem>
-#include <limits>
 #include <stdexcept>
 
 #include "core/types.h"
@@ -13,24 +11,6 @@
 #include "material/material.h"
 #include "scene.h"
 #include "util/obj_loader.h"
-
-LuxInline void ground_scene_vertices(Scene& scene, const SceneMeshAppendRange& range,
-                                     Float floor_y) {
-    if (range.vertex_count <= 0) return;
-    if (range.mesh_id < 0 || range.mesh_id >= static_cast<int>(scene.mesh_assets.size())) {
-        throw std::runtime_error("ground_scene_vertices: mesh id out of range");
-    }
-
-    const SceneMesh& mesh = scene.mesh_assets[range.mesh_id];
-    Float min_y = std::numeric_limits<Float>::infinity();
-    int end_vertex = range.first_vertex + range.vertex_count;
-    for (int i = range.first_vertex; i < end_vertex; ++i) {
-        min_y = std::min(min_y, mesh.vertices[i].y);
-    }
-
-    Float dy = floor_y - min_y;
-    offset_scene_vertices(scene, range, vec3(0, dy, 0));
-}
 
 LuxInline Scene make_stanford_bunny_scene(const std::filesystem::path& asset_root,
                                           ObjLoadOptions obj_options) {
@@ -56,6 +36,8 @@ LuxInline Scene make_stanford_bunny_scene(const std::filesystem::path& asset_roo
     int first_bunny_material = static_cast<int>(scene.materials.size());
     std::filesystem::path model_path = asset_root / "models" / "stanford-bunny.obj";
     SceneMeshAppendRange bunny_range;
+    obj_options.placement.ground_to_y = true;
+    obj_options.placement.target_y = Float(0);
     if (!load_obj_into_scene(model_path.string(), scene, obj_options, &bunny_range)) {
         throw std::runtime_error("Failed to load Stanford Bunny OBJ: " + model_path.string());
     }
@@ -69,7 +51,6 @@ LuxInline Scene make_stanford_bunny_scene(const std::filesystem::path& asset_roo
             set_scene_material(scene, i, Material::thin_lambert(scene.materials[i].albedo));
         }
     }
-    ground_scene_vertices(scene, bunny_range, Float(0));
 
     return scene;
 }

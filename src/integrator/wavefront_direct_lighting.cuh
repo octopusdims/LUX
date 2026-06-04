@@ -32,9 +32,11 @@ LuxDeviceInline DirectLightEstimate sample_direct_light(
     }
 
     LightSampleContext ctx{interaction.position, interaction.ng, interaction.ns};
+    Float light_select_u = sampler_get_1d(sampler);
+    Float light_component_u = sampler_get_1d(sampler);
+    vec2 light_u = sampler_get_2d(sampler);
     light = sample_light_li(
-        scene, ctx, sampler_get_1d(sampler), sampler_get_1d(sampler),
-        sampler_get_2d(sampler));
+        scene, ctx, light_select_u, light_component_u, light_u);
     sampled_light = light.valid;
     return sampled_light
         ? estimate_unoccluded_direct_light_li_typed<MaterialKind>(

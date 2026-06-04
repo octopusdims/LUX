@@ -229,9 +229,11 @@ void print_path_probe(const Scene& scene, const CpuBvh& bvh,
             if (has_direct_lighting_lobe(material)) {
                 LightSampleContext light_ctx{
                     interaction.position, interaction.ng, interaction.ns};
+                Float light_select_u = sampler_get_1d(sampler);
+                Float light_component_u = sampler_get_1d(sampler);
+                vec2 light_u = sampler_get_2d(sampler);
                 LightLiSample light = sample_light_li(
-                    lights, light_ctx, sampler_get_1d(sampler),
-                    sampler_get_1d(sampler), sampler_get_2d(sampler));
+                    lights, light_ctx, light_select_u, light_component_u, light_u);
                 if (!light.valid) {
                     std::printf("    nee reject=sample\n");
                 } else {
@@ -290,8 +292,10 @@ void print_path_probe(const Scene& scene, const CpuBvh& bvh,
                 }
             }
 
-            BSDFSample sample = sample_bsdf(
-                material, interaction, vec2(sampler_get_1d(sampler), sampler_get_1d(sampler)));
+            Float bsdf_u0 = sampler_get_1d(sampler);
+            Float bsdf_u1 = sampler_get_1d(sampler);
+            BSDFSample sample =
+                sample_bsdf(material, interaction, vec2(bsdf_u0, bsdf_u1));
             Float cos_theta = abs_cosine(interaction.ns, sample.wi);
             std::printf("    bsdf sample: wi=(%.8g,%.8g,%.8g) fmax=%.8g weight_max=%.8g "
                         "pdf=%.8g cos_abs=%.8g delta=%d\n",
@@ -375,9 +379,11 @@ void print_nee_probe(const Scene& scene, const CpuBvh& bvh,
             source_hit.position, source_hit.ng, source_hit.ns, -camera_ray.direction);
 
         LightSampleContext light_ctx{interaction.position, interaction.ng, interaction.ns};
+        Float light_select_u = sampler_get_1d(sampler);
+        Float light_component_u = sampler_get_1d(sampler);
+        vec2 light_u = sampler_get_2d(sampler);
         LightLiSample light = sample_light_li(
-            lights, light_ctx, sampler_get_1d(sampler), sampler_get_1d(sampler),
-            sampler_get_2d(sampler));
+            lights, light_ctx, light_select_u, light_component_u, light_u);
         if (!light.valid) {
             std::printf("sample %d: failed to sample light\n", s);
             continue;

@@ -190,7 +190,9 @@ LuxHDInline Float sampler_get_1d(SamplerState& sampler) {
 }
 
 LuxHDInline vec2 sampler_get_2d(SamplerState& sampler) {
-    return vec2(sampler_get_1d(sampler), sampler_get_1d(sampler));
+    Float x = sampler_get_1d(sampler);
+    Float y = sampler_get_1d(sampler);
+    return vec2(x, y);
 }
 
 #endif // LUX_SAMPLER_H

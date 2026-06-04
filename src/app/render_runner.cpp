@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -25,6 +26,7 @@
 #include "scene/stanford_bunny.h"
 #include "scene/stanford_dragon.h"
 #include "scene/transparent_filter.h"
+#include "scene/lux_cover.h"
 #include "diagnostics/cpu/cpu_diagnostics.h"
 
 namespace {
@@ -159,6 +161,14 @@ Scene make_dragon_scene_from_config(const RenderConfig& config) {
     return scene;
 }
 
+Scene make_lux_cover_scene_from_config(const RenderConfig& config) {
+    Scene scene = make_lux_cover_scene(resolve_demo_asset_root(config));
+    scene.camera = make_pinhole_camera(
+        vec3(0.0f, 0.52f, -3.0f), vec3(0.0f, 0.36f, 0.0f), 32.0f,
+        render_aspect(config));
+    return scene;
+}
+
 struct SceneDescriptor {
     const char* name;
     Scene (*make_scene)(const RenderConfig&);
@@ -174,6 +184,7 @@ constexpr SceneDescriptor kSceneRegistry[] = {
     {"transparent-filter", make_transparent_filter_scene_from_config},
     {"bunny", make_bunny_scene_from_config},
     {"dragon", make_dragon_scene_from_config},
+    {"lux-cover", make_lux_cover_scene_from_config},
 };
 
 const SceneDescriptor* find_scene_descriptor(const std::string& name) {
@@ -283,17 +294,30 @@ std::string available_render_scene_names() {
 int run_render(const RenderConfig& config) {
     auto total_start = Clock::now();
     StageTimings timings;
+    auto finish = [&](int code) {
+        if (config.show_timing) {
+            print_timing_breakdown(timings, total_start, Clock::now());
+        }
+        return code;
+    };
 
     const SceneDescriptor* scene_descriptor = find_scene_descriptor(config.scene_name);
     if (!scene_descriptor) {
         std::string names = available_render_scene_names();
         std::fprintf(stderr, "Unknown scene '%s'. Available scenes: %s\n",
                      config.scene_name.c_str(), names.c_str());
-        return 1;
+        return finish(1);
     }
 
     auto scene_setup_start = Clock::now();
-    Scene scene = scene_descriptor->make_scene(config);
+    Scene scene;
+    try {
+        scene = scene_descriptor->make_scene(config);
+    } catch (const std::exception& error) {
+        timings.scene_setup_ms = elapsed_ms(scene_setup_start, Clock::now());
+        std::fprintf(stderr, "Scene setup failed: %s\n", error.what());
+        return finish(1);
+    }
     OutputPaths output_paths = resolve_output_paths(config);
     DebugRequest debug_request = config.debug;
     if (debug_request.has_aov() && debug_request.output_path.empty()) {
@@ -309,20 +333,20 @@ int run_render(const RenderConfig& config) {
     timings.scene_setup_ms = elapsed_ms(scene_setup_start, scene_setup_end);
 
     auto prepared_scene_start = Clock::now();
-    PreparedScene prepared_scene(std::move(scene));
+    std::unique_ptr<PreparedScene> prepared_scene;
+    try {
+        prepared_scene = std::make_unique<PreparedScene>(std::move(scene));
+    } catch (const std::exception& error) {
+        timings.prepared_scene_ms = elapsed_ms(prepared_scene_start, Clock::now());
+        std::fprintf(stderr, "Prepared scene construction failed: %s\n", error.what());
+        return finish(1);
+    }
     auto prepared_scene_end = Clock::now();
     timings.prepared_scene_ms = elapsed_ms(prepared_scene_start, prepared_scene_end);
 
-    auto finish = [&](int code) {
-        if (config.show_timing) {
-            print_timing_breakdown(timings, total_start, Clock::now());
-        }
-        return code;
-    };
-
-    const Scene& host_scene = prepared_scene.host_scene();
+    const Scene& host_scene = prepared_scene->host_scene();
     const Camera& camera = host_scene.camera;
-    const LightDistribution& scene_lights = prepared_scene.light_distribution();
+    const LightDistribution& scene_lights = prepared_scene->light_distribution();
     unsigned render_aov_mask = debug_request.has_aov()
         ? (debug_request.aov_mask & ~DebugAovOrientation)
         : 0;
@@ -331,11 +355,11 @@ int run_render(const RenderConfig& config) {
     const CpuBvh* host_bvh = nullptr;
     if (needs_host_bvh) {
         auto host_bvh_start = Clock::now();
-        prepared_scene.prepare_host_bvh();
+        prepared_scene->prepare_host_bvh();
         auto host_bvh_end = Clock::now();
         timings.host_bvh_ms += elapsed_ms(host_bvh_start, host_bvh_end);
 
-        host_bvh = &prepared_scene.host_bvh();
+        host_bvh = &prepared_scene->host_bvh();
         CpuBvhStats stats = cpu_bvh_stats(*host_bvh);
         std::printf("Built host TLAS/BLAS LBVH: %zu TLAS nodes, %zu instances, "
                     "%zu BLAS nodes, %zu mesh primitives\n",
@@ -389,7 +413,7 @@ int run_render(const RenderConfig& config) {
     if (integrator->requires_gpu_scene()) {
         auto gpu_prepare_start = Clock::now();
         try {
-            prepared_scene.prepare_gpu();
+            prepared_scene->prepare_gpu();
         } catch (const std::exception& error) {
             auto gpu_prepare_end = Clock::now();
             timings.gpu_prepare_ms += elapsed_ms(gpu_prepare_start, gpu_prepare_end);
@@ -399,7 +423,7 @@ int run_render(const RenderConfig& config) {
         auto gpu_prepare_end = Clock::now();
         timings.gpu_prepare_ms += elapsed_ms(gpu_prepare_start, gpu_prepare_end);
 
-        GpuBvhView gpu_bvh = prepared_scene.device_bvh();
+        GpuBvhView gpu_bvh = prepared_scene->device_bvh();
         std::printf("Built GPU TLAS/BLAS: %d TLAS nodes, %zu instances, %zu meshes\n",
                     gpu_bvh.node_count, host_scene.instances.size(),
                     host_scene.mesh_assets.size());
@@ -427,7 +451,7 @@ int run_render(const RenderConfig& config) {
     if (config.use_gpu) {
         try {
             auto render_start = Clock::now();
-            integrator->render(prepared_scene, beauty, settings,
+            integrator->render(*prepared_scene, beauty, settings,
                                enable_render_aov ? &render_outputs : nullptr);
             auto render_end = Clock::now();
             timings.render_ms += elapsed_ms(render_start, render_end);
@@ -439,7 +463,7 @@ int run_render(const RenderConfig& config) {
         }
     } else {
         auto render_start = Clock::now();
-        integrator->render(prepared_scene, beauty, settings,
+        integrator->render(*prepared_scene, beauty, settings,
                            enable_render_aov ? &render_outputs : nullptr);
         auto render_end = Clock::now();
         timings.render_ms += elapsed_ms(render_start, render_end);

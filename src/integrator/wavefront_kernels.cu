@@ -271,7 +271,6 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
                                      PathStateView paths,
                                      GpuBvhView bvh,
                                      GpuScene scene,
-                                     vec3* output_pixels,
                                      WavefrontDebugViews debug,
                                      int width, int height) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -313,8 +312,6 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
     if (found) {
         GpuSceneTriangle surface = gpu_scene_triangle(scene, primitive_ref);
         if (!surface.valid) {
-            int pixel = paths.pixel_index[path_id];
-            output_pixels[pixel] += paths.radiance[path_id];
             return;
         }
         Triangle tri = surface.triangle;
@@ -326,8 +323,6 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
             hit_u, hit_v};
         int material_id = surface.material_id;
         if (material_id < 0 || material_id >= scene.material_count) {
-            int pixel = paths.pixel_index[path_id];
-            output_pixels[pixel] += paths.radiance[path_id];
             return;
         }
         MaterialType material_type = scene.materials[material_id].type;
@@ -350,8 +345,6 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
                 paths.radiance[path_id] += paths.throughput[path_id] * Le * mis_weight;
             }
         }
-        int pixel = paths.pixel_index[path_id];
-        output_pixels[pixel] += paths.radiance[path_id];
     }
 }
 
@@ -420,6 +413,14 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
                 terminate_queue, path_log, paths, path_id, paths.depth[path_id],
                 triangle_id, material_id, item, interaction, log, throughput_before,
                 throughput_after, PathLogTerminationZeroThroughput);
+            return;
+        }
+
+        if (wavefront_depth >= max_depth) {
+            terminate_surface_stage<LogPaths>(
+                terminate_queue, path_log, paths, path_id, paths.depth[path_id],
+                triangle_id, material_id, item, interaction, log, throughput_before,
+                throughput_after, PathLogTerminationMaxDepth);
             return;
         }
 
@@ -546,16 +547,15 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
         path_id, spawn_scatter_ray(item.position, interaction.ng, sample.wi)});
 }
 
-__global__ void accumulate_terminated_paths_kernel(
-        WorkQueue<TerminatedPathItem> terminate_queue,
+__global__ void flush_batch_paths_kernel(
         PathStateView paths,
-        vec3* output_pixels) {
+        vec3* output_pixels,
+        int batch_size) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid >= *terminate_queue.size) return;
+    if (tid >= batch_size) return;
 
-    int path_id = terminate_queue.read(tid).path_id;
-    int pixel = paths.pixel_index[path_id];
-    output_pixels[pixel] += paths.radiance[path_id];
+    int pixel = paths.pixel_index[tid];
+    output_pixels[pixel] += paths.radiance[tid];
 }
 
 __global__ void trace_shadow_rays_kernel(WorkQueue<ShadowRayWorkItem> shadow_queue,
@@ -624,7 +624,7 @@ void launch_intersect_bvh(WavefrontRuntime& runtime,
     intersect_bvh_kernel<<<grid_size(batch_size), WavefrontRuntime::kBlockSize>>>(
         runtime.ray_queue.view(),
         runtime.hit_queues.views(),
-        paths, bvh, scene, runtime.output_pixels_ptr(), debug, width, height);
+        paths, bvh, scene, debug, width, height);
     check_cuda_or_throw("intersect_bvh_kernel");
 }
 
@@ -684,12 +684,12 @@ void launch_trace_shadow_rays(WavefrontRuntime& runtime,
     check_cuda_or_throw("trace_shadow_rays_kernel");
 }
 
-void launch_accumulate_terminated_paths(WavefrontRuntime& runtime,
-                                        PathStateView paths,
-                                        int batch_size) {
-    accumulate_terminated_paths_kernel<<<grid_size(batch_size), WavefrontRuntime::kBlockSize>>>(
-        runtime.terminate_queue.view(), paths, runtime.output_pixels_ptr());
-    check_cuda_or_throw("accumulate_terminated_paths_kernel");
+void launch_flush_batch_paths(WavefrontRuntime& runtime,
+                              PathStateView paths,
+                              int batch_size) {
+    flush_batch_paths_kernel<<<grid_size(batch_size), WavefrontRuntime::kBlockSize>>>(
+        paths, runtime.output_pixels_ptr(), batch_size);
+    check_cuda_or_throw("flush_batch_paths_kernel");
 }
 
 void launch_clear_bounce_queues(WavefrontRuntime& runtime) {

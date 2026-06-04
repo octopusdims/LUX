@@ -92,8 +92,35 @@ LuxHDInline Float affine_determinant3x3(const mat4& transform) {
          + a02 * (a10 * a21 - a11 * a20);
 }
 
+LuxHDInline bool is_affine_matrix(const mat4& transform) {
+    return fabsf(transform.m[3][0]) <= Float(1e-6)
+        && fabsf(transform.m[3][1]) <= Float(1e-6)
+        && fabsf(transform.m[3][2]) <= Float(1e-6)
+        && fabsf(transform.m[3][3] - Float(1)) <= Float(1e-6);
+}
+
 LuxHDInline bool is_affine_invertible(const mat4& transform) {
-    return fabsf(affine_determinant3x3(transform)) > Float(1e-12);
+    return is_affine_matrix(transform)
+        && fabsf(affine_determinant3x3(transform)) > Float(1e-12);
+}
+
+LuxHDInline bool mat4_near_identity(const mat4& transform,
+                                    Float epsilon = Float(1e-4)) {
+    for (int row = 0; row < 4; ++row) {
+        for (int col = 0; col < 4; ++col) {
+            Float expected = (row == col) ? Float(1) : Float(0);
+            if (!(fabsf(transform.m[row][col] - expected) <= epsilon)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+LuxHDInline bool transform_inverse_pair_consistent(const Transform& transform,
+                                                   Float epsilon = Float(1e-4)) {
+    return mat4_near_identity(transform.m * transform.inv, epsilon)
+        && mat4_near_identity(transform.inv * transform.m, epsilon);
 }
 
 LuxHDInline mat4 inverse_affine(const mat4& transform) {
@@ -180,9 +207,9 @@ LuxHDInline vec3 inverse_transform_vector(const Transform& transform, const vec3
 }
 
 LuxHDInline vec3 transform_normal(const mat4& transform, const vec3& normal) {
-    // n' = (M^{-1})^T * n. For affine transforms with uniform scale,
-    // this is equivalent to transform_vector with M^{-T}.
-    // General inverse-transpose via adjugate of upper 3x3.
+    // Use adj(M)^T * n = det(M) * M^{-T} * n. After normalization this matches
+    // inverse-transpose for positive determinants and preserves the handedness
+    // flip needed for mirrored instance transforms.
     Float a00 = transform.m[1][1] * transform.m[2][2] - transform.m[1][2] * transform.m[2][1];
     Float a01 = transform.m[1][2] * transform.m[2][0] - transform.m[1][0] * transform.m[2][2];
     Float a02 = transform.m[1][0] * transform.m[2][1] - transform.m[1][1] * transform.m[2][0];

@@ -3,15 +3,8 @@
 #ifndef LUX_SCENE_VALIDATE_H
 #define LUX_SCENE_VALIDATE_H
 
+#include "core/validation.cuh"
 #include "scene/scene_data.h"
-
-LuxInline bool finite_vec2(const vec2& value) {
-    return std::isfinite(value.x) && std::isfinite(value.y);
-}
-
-LuxInline bool finite_vec3(const vec3& value) {
-    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
 
 LuxInline bool vec3_channels_in_range(const vec3& value, Float lo, Float hi) {
     return value.x >= lo && value.x <= hi
@@ -63,6 +56,7 @@ LuxInline void validate_scene_shape(const Scene& scene) {
         if (asset.width <= 0 || asset.height <= 0
             || asset.pixels.size() != static_cast<size_t>(asset.width * asset.height)
             || asset.cdf.size() != asset.pixels.size()
+            || !std::isfinite(static_cast<double>(asset.total_weight))
             || asset.total_weight < 0) {
             throw std::runtime_error("Scene validation failed: image light asset contains invalid value");
         }
@@ -70,6 +64,19 @@ LuxInline void validate_scene_shape(const Scene& scene) {
             if (!finite_vec3(pixel)) {
                 throw std::runtime_error("Scene validation failed: image light asset pixel contains non-finite value");
             }
+        }
+        Float previous_cdf = Float(0);
+        for (Float cdf_value : asset.cdf) {
+            if (!std::isfinite(static_cast<double>(cdf_value))
+                || cdf_value < previous_cdf) {
+                throw std::runtime_error("Scene validation failed: image light asset cdf is invalid");
+            }
+            previous_cdf = cdf_value;
+        }
+        Float cdf_tolerance =
+            Float(1e-5) * fmaxf(Float(1e-6), fabsf(asset.total_weight));
+        if (fabsf(previous_cdf - asset.total_weight) > cdf_tolerance) {
+            throw std::runtime_error("Scene validation failed: image light asset cdf total is inconsistent");
         }
     }
 
@@ -126,6 +133,18 @@ LuxInline void validate_scene_shape(const Scene& scene) {
             || instance.material_override >= static_cast<int>(scene.materials.size())) {
             throw std::runtime_error("Scene validation failed: instance material override out of range");
         }
+        if (instance_transform_valid(instance.object_to_world)) {
+            continue;
+        }
+        if (!instance_transform_matrices_finite(instance.object_to_world)) {
+            throw std::runtime_error("Scene validation failed: instance transform contains non-finite value");
+        }
+        if (!instance_transform_matrices_affine_invertible(instance.object_to_world)) {
+            throw std::runtime_error("Scene validation failed: instance transform must be affine-invertible");
+        }
+        if (!transform_inverse_pair_consistent(instance.object_to_world)) {
+            throw std::runtime_error("Scene validation failed: instance transform inverse is inconsistent");
+        }
     }
     if (scene.default_mesh_id < -1
         || scene.default_mesh_id >= static_cast<int>(scene.mesh_assets.size())) {
@@ -165,6 +184,7 @@ LuxInline void validate_scene_shape(const Scene& scene) {
                 if (light.image_infinite.image_id < 0
                     || light.image_infinite.image_id >= static_cast<int>(scene.image_light_assets.size())
                     || light.image_infinite.width <= 0 || light.image_infinite.height <= 0
+                    || !std::isfinite(static_cast<double>(light.image_infinite.total_weight))
                     || light.image_infinite.total_weight < 0
                     || !finite_vec3(light.image_infinite.scale)) {
                     throw std::runtime_error("Scene validation failed: image infinite light contains invalid value");
