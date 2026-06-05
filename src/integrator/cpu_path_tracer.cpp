@@ -409,6 +409,7 @@ vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
         0, PdfMeasure::None, SampleSource::Camera, 0, vec3(0)};
     int depth = 0;
     int passthrough_hits = 0;
+    Float eta_scale = 1;
 
     for (int step = 0; step <= max_depth; ++step) {
         SurfaceHit hit;
@@ -468,10 +469,11 @@ vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
         bool sample_delta = is_delta_bsdf(sample.flags);
         if (sample.pdf <= 0 || max_component(sample.weight) <= 0) break;
         new_throughput = throughput * sample.weight;
+        Float new_eta_scale = eta_scale * bsdf_eta_scale_factor(sample);
 
         if (should_apply_russian_roulette(depth)) {
             Float rr_prob = 1;
-            if (!survives_russian_roulette(depth, new_throughput,
+            if (!survives_russian_roulette(depth, new_throughput, new_eta_scale,
                                            sampler_get_1d(sampler), rr_prob)) {
                 break;
             }
@@ -479,6 +481,7 @@ vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
         }
 
         throughput = new_throughput;
+        eta_scale = new_eta_scale;
         previous_sample = PreviousSample{
             sample.pdf,
             sample.pdf_measure,
@@ -495,14 +498,14 @@ vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
 }
 
 vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
-                const LightDistribution& lights, Ray ray, SamplerState& sampler,
+                const PreparedLightSampling& light_sampling, Ray ray, SamplerState& sampler,
                 int max_depth) {
-    SceneLightSampler light_sampler = make_scene_light_sampler(scene, lights);
+    SceneLightSampler light_sampler = make_scene_light_sampler(scene, light_sampling);
     return trace_path(scene, bvh, light_sampler, ray, sampler, max_depth);
 }
 
 void render_cpu_path_tracer(const Scene& scene, const CpuBvh& bvh,
-                            const LightDistribution& lights,
+                            const PreparedLightSampling& light_sampling,
                             Film& film,
                             const RenderSettings& settings,
                             RenderOutputs* outputs) {
@@ -515,7 +518,8 @@ void render_cpu_path_tracer(const Scene& scene, const CpuBvh& bvh,
 
     cpu_path_tracer_detail::CpuAovTargets aov_targets =
         cpu_path_tracer_detail::make_cpu_aov_targets(outputs, film);
-    SceneLightSampler light_sampler = make_scene_light_sampler(scene, lights);
+    SceneLightSampler light_sampler =
+        make_scene_light_sampler(scene, light_sampling, settings.light_sampler_kind);
     const Camera& camera = scene.camera;
 
     for (int y = 0; y < film.height; ++y) {
@@ -569,6 +573,6 @@ void CpuPathTracer::render(const PreparedScene& scene, Film& film,
                            const RenderSettings& settings,
                            RenderOutputs* outputs) {
     render_cpu_path_tracer(
-        scene.host_scene(), scene.host_bvh(), scene.light_distribution(),
+        scene.host_scene(), scene.host_bvh(), scene.light_sampling(),
         film, settings, outputs);
 }

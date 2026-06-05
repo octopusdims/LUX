@@ -19,11 +19,11 @@ vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
                 int max_depth);
 
 vec3 trace_path(const Scene& scene, const CpuBvh& bvh,
-                const LightDistribution& lights, Ray ray, SamplerState& sampler,
+                const PreparedLightSampling& light_sampling, Ray ray, SamplerState& sampler,
                 int max_depth);
 
 void render_cpu_path_tracer(const Scene& scene, const CpuBvh& bvh,
-                            const LightDistribution& lights, Film& film,
+                            const PreparedLightSampling& light_sampling, Film& film,
                             const RenderSettings& settings,
                             RenderOutputs* outputs = nullptr);
 

@@ -158,6 +158,7 @@ struct PathLogStorage {
 struct PathStateView {
     int max_paths = 0;
     vec3* throughput = nullptr;
+    Float* eta_scale = nullptr;
     vec3* radiance = nullptr;
     int* pixel_index = nullptr;
     int* depth = nullptr;
@@ -199,6 +200,7 @@ LuxHDInline bool last_sample_is_solid_angle(PathStateView paths, int path_id) {
 
 struct PathStateStorage {
     thrust::device_vector<vec3> throughput;
+    thrust::device_vector<Float> eta_scale;
     thrust::device_vector<vec3> radiance;
     thrust::device_vector<int> pixel_index;
     thrust::device_vector<int> depth;
@@ -212,6 +214,7 @@ struct PathStateStorage {
 
     void allocate(int max_paths) {
         throughput.resize(max_paths);
+        eta_scale.resize(max_paths);
         radiance.resize(max_paths);
         pixel_index.resize(max_paths);
         depth.resize(max_paths);
@@ -228,6 +231,7 @@ struct PathStateStorage {
         PathStateView ps;
         ps.max_paths = static_cast<int>(throughput.size());
         ps.throughput = thrust::raw_pointer_cast(throughput.data());
+        ps.eta_scale = thrust::raw_pointer_cast(eta_scale.data());
         ps.radiance = thrust::raw_pointer_cast(radiance.data());
         ps.pixel_index = thrust::raw_pointer_cast(pixel_index.data());
         ps.depth = thrust::raw_pointer_cast(depth.data());

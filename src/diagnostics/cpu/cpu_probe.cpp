@@ -123,6 +123,7 @@ void print_path_probe(const Scene& scene, const CpuBvh& bvh,
             0, PdfMeasure::None, SampleSource::Camera, 0, vec3(0)};
         int depth = 0;
         int passthrough_hits = 0;
+        Float eta_scale = 1;
         int max_steps = settings.max_depth + 1;
 
         std::printf("sample %d:\n", s);
@@ -312,12 +313,13 @@ void print_path_probe(const Scene& scene, const CpuBvh& bvh,
                 break;
             }
             new_throughput = throughput * sample.weight;
+            Float new_eta_scale = eta_scale * bsdf_eta_scale_factor(sample);
 
             if (should_apply_russian_roulette(depth)) {
                 Float rr_prob = 1;
                 Float rr_u = sampler_get_1d(sampler);
                 bool survived = survives_russian_roulette(
-                    depth, new_throughput, rr_u, rr_prob);
+                    depth, new_throughput, new_eta_scale, rr_u, rr_prob);
                 std::printf("    rr: u=%.8g p=%.8g survived=%d\n",
                             double(rr_u), double(rr_prob), survived ? 1 : 0);
                 if (!survived) {
@@ -328,6 +330,7 @@ void print_path_probe(const Scene& scene, const CpuBvh& bvh,
             }
 
             throughput = new_throughput;
+            eta_scale = new_eta_scale;
             previous_sample = PreviousSample{
                 sample.pdf,
                 sample.pdf_measure,

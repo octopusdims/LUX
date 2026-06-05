@@ -20,6 +20,7 @@ struct BSDFSample {
     vec3 f = vec3(0);       // finite-density BSDF value; delta lobes keep this zero
     vec3 weight = vec3(0);  // throughput multiplier for the sampled direction
     Float pdf = 0;
+    Float eta = 1;          // relative IOR scale for specular transmission
     PdfMeasure pdf_measure = PdfMeasure::None;
     unsigned flags = 0;
 };
@@ -444,6 +445,7 @@ LuxHDInline BSDFSample sample_dielectric(const Material& material,
         sample.wi = normalize(2.0f * cos_theta * normal - wo);
         sample.weight = material.albedo;
         sample.pdf = F;
+        sample.eta = 1.0f;
         sample.pdf_measure = PdfMeasure::Discrete;
         sample.flags = BsdfFlagDeltaReflection;
     } else {
@@ -454,14 +456,17 @@ LuxHDInline BSDFSample sample_dielectric(const Material& material,
             sample.wi = normalize(2.0f * cos_theta * normal - wo);
             sample.weight = material.albedo;
             sample.pdf = 1.0f;
+            sample.eta = 1.0f;
             sample.pdf_measure = PdfMeasure::Discrete;
             sample.flags = BsdfFlagDeltaReflection;
             return sample;
         }
         Float cos_theta_t = sqrtf(fmaxf(Float(0), 1.0f - sin_theta_t * sin_theta_t));
         sample.wi = normalize((eta_i / eta_t) * (-wo) + ((eta_i / eta_t) * cos_theta - cos_theta_t) * normal);
-        sample.weight = material.albedo;
+        Float etap = eta_t / eta_i;
+        sample.weight = material.albedo / (etap * etap);
         sample.pdf = 1.0f - F;
+        sample.eta = etap;
         sample.pdf_measure = PdfMeasure::Discrete;
         sample.flags = BsdfFlagDeltaTransmission | BsdfFlagTransmission;
     }

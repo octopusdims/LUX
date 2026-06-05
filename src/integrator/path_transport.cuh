@@ -59,12 +59,19 @@ LuxHDInline bool should_apply_russian_roulette(int depth) {
     return depth > 2;
 }
 
-LuxHDInline Float russian_roulette_probability(const vec3& throughput) {
-    return fminf(Float(0.95), max_component(throughput));
+LuxHDInline Float bsdf_eta_scale_factor(const BSDFSample& sample) {
+    if (!is_transmission_bsdf(sample.flags) || sample.eta <= 0) return Float(1);
+    return sample.eta * sample.eta;
+}
+
+LuxHDInline Float russian_roulette_probability(const vec3& throughput,
+                                               Float eta_scale = Float(1)) {
+    return fminf(Float(0.95), max_component(throughput) * eta_scale);
 }
 
 LuxHDInline bool survives_russian_roulette(int depth,
                                            const vec3& throughput,
+                                           Float eta_scale,
                                            Float random_value,
                                            Float& survival_probability) {
     if (!should_apply_russian_roulette(depth)) {
@@ -72,8 +79,16 @@ LuxHDInline bool survives_russian_roulette(int depth,
         return true;
     }
 
-    survival_probability = russian_roulette_probability(throughput);
+    survival_probability = russian_roulette_probability(throughput, eta_scale);
     return random_value <= survival_probability;
+}
+
+LuxHDInline bool survives_russian_roulette(int depth,
+                                           const vec3& throughput,
+                                           Float random_value,
+                                           Float& survival_probability) {
+    return survives_russian_roulette(
+        depth, throughput, Float(1), random_value, survival_probability);
 }
 
 LuxHDInline vec3 apply_passthrough(const vec3& throughput,
