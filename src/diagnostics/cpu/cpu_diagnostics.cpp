@@ -6,7 +6,7 @@
 #include "cpu_diagnostics_internal.h"
 
 bool run_cpu_diagnostic_request(const Scene& scene, const CpuBvh& bvh,
-                                const LightDistribution& lights,
+                                const PreparedLightSampling& light_sampling,
                                 const Camera& camera,
                                 int width, int height,
                                 const RenderSettings& settings,
@@ -17,13 +17,15 @@ bool run_cpu_diagnostic_request(const Scene& scene, const CpuBvh& bvh,
         return true;
     }
     if (request.probe_mode == DebugProbeMode::Path) {
-        SceneLightSampler light_sampler = make_scene_light_sampler(scene, lights);
+        SceneLightSampler light_sampler =
+            make_scene_light_sampler(scene, light_sampling, settings.light_sampler_kind);
         lux_cpu_diagnostics_detail::print_path_probe(
             scene, bvh, light_sampler, camera, width, height, settings, request);
         return true;
     }
     if (request.probe_mode == DebugProbeMode::Nee) {
-        SceneLightSampler light_sampler = make_scene_light_sampler(scene, lights);
+        SceneLightSampler light_sampler =
+            make_scene_light_sampler(scene, light_sampling, settings.light_sampler_kind);
         lux_cpu_diagnostics_detail::print_nee_probe(
             scene, bvh, light_sampler, camera, width, height, settings, request);
         return true;

@@ -6,6 +6,7 @@
 #include "core/constants.h"
 #include "core/ray_offset.cuh"
 #include "integrator/pathstate.cuh"
+#include "integrator/render_context.h"
 #include "light/light_sampler.h"
 #include "material/bsdf.h"
 #include "sampler/sampler.h"
@@ -17,6 +18,7 @@ namespace lux_wavefront_direct {
 template <MaterialType MaterialKind>
 LuxDeviceInline DirectLightEstimate sample_direct_light(
         GpuScene scene,
+        GpuRenderParams render_params,
         const Material& material,
         const SurfaceInteraction& interaction,
         SamplerState& sampler,
@@ -36,7 +38,8 @@ LuxDeviceInline DirectLightEstimate sample_direct_light(
     Float light_component_u = sampler_get_1d(sampler);
     vec2 light_u = sampler_get_2d(sampler);
     light = sample_light_li(
-        scene, ctx, light_select_u, light_component_u, light_u);
+        scene, render_params.light_sampler_kind, ctx, light_select_u,
+        light_component_u, light_u);
     sampled_light = light.valid;
     return sampled_light
         ? estimate_unoccluded_direct_light_li_typed<MaterialKind>(

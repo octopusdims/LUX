@@ -154,6 +154,7 @@ struct SurfaceStageLogState {
 LuxDeviceInline unsigned apply_surface_emission_stage(
         PathStateView paths,
         GpuScene scene,
+        GpuRenderParams render_params,
         int path_id,
         const HitWorkItem& item,
         const PreviousSample& previous_sample,
@@ -172,7 +173,8 @@ LuxDeviceInline unsigned apply_surface_emission_stage(
 
     if (emission_uses_mis(previous_sample)) {
         Float light_pdf = area_light_pdf_solid_angle(
-            scene, item.primitive_ref, triangle_id, item.position,
+            scene, render_params.light_sampler_kind, item.primitive_ref, triangle_id,
+            item.position,
             previous_sample.reference_position);
         Float mis_weight = emission_mis_weight(previous_sample, light_pdf);
         paths.radiance[path_id] += paths.throughput[path_id] * Le * mis_weight;
@@ -246,6 +248,7 @@ __global__ void generate_camera_rays_kernel(PathStateView paths, WorkQueue<RayWo
 
     int path_id = tid;
     paths.throughput[path_id] = vec3(1);
+    paths.eta_scale[path_id] = Float(1);
     paths.radiance[path_id] = vec3(0);
     paths.pixel_index[path_id] = global_pixel;
     paths.depth[path_id] = 0;
@@ -271,6 +274,7 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
                                      PathStateView paths,
                                      GpuBvhView bvh,
                                      GpuScene scene,
+                                     GpuRenderParams render_params,
                                      WavefrontDebugViews debug,
                                      int width, int height) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -340,7 +344,8 @@ __global__ void intersect_bvh_kernel(WorkQueue<RayWorkItem> ray_queue,
             if (emission_uses_unweighted_hit(paths.depth[path_id], previous_sample)) {
                 paths.radiance[path_id] += paths.throughput[path_id] * Le;
             } else if (emission_uses_mis(previous_sample)) {
-                Float light_pdf = infinite_lights_pdf_li(scene, ray.direction);
+                Float light_pdf = infinite_lights_pdf_li(
+                    scene, render_params.light_sampler_kind, ray.direction);
                 Float mis_weight = emission_mis_weight(previous_sample, light_pdf);
                 paths.radiance[path_id] += paths.throughput[path_id] * Le * mis_weight;
             }
@@ -355,6 +360,7 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
                                     WorkQueue<TerminatedPathItem> terminate_queue,
                                     PathStateView paths,
                                     GpuScene scene,
+                                    GpuRenderParams render_params,
                                     int width, int height,
                                     int wavefront_depth,
                                     int max_depth,
@@ -392,7 +398,7 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
     vec3 throughput_after = throughput_before;
     SurfaceStageLogState log;
     log.events |= apply_surface_emission_stage(
-        paths, scene, path_id, item, previous_sample, geometric_normal);
+        paths, scene, render_params, path_id, item, previous_sample, geometric_normal);
 
     if (is_passthrough_material(material)) {
         log.events |= PathLogEventPassthrough;
@@ -456,7 +462,8 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
         bool sampled_light = false;
         DirectLightEstimate direct =
             lux_wavefront_direct::sample_direct_light<MaterialKind>(
-                scene, material, interaction, sampler, light, sampled_light);
+                scene, render_params, material, interaction, sampler, light,
+                sampled_light);
         if (sampled_light) {
             log.events |= PathLogEventDirectLightSampled;
             if (direct.pdf_light_solid_angle > 0) {
@@ -516,12 +523,14 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
         return;
     }
     new_throughput = paths.throughput[path_id] * sample.weight;
+    Float new_eta_scale = paths.eta_scale[path_id] * bsdf_eta_scale_factor(sample);
     log.source = SampleSource::BSDF;
     throughput_after = new_throughput;
 
     if (should_apply_russian_roulette(paths.depth[path_id])) {
         Float rr_prob = 1;
         if (!survives_russian_roulette(paths.depth[path_id], new_throughput,
+                                       new_eta_scale,
                                        sampler_get_1d(sampler), rr_prob)) {
             terminate_surface_stage<LogPaths>(
                 terminate_queue, path_log, paths, path_id, paths.depth[path_id],
@@ -534,6 +543,7 @@ __global__ void evaluate_hit_kernel(WorkQueue<HitWorkItem> hit_queue,
     }
 
     paths.throughput[path_id] = new_throughput;
+    paths.eta_scale[path_id] = new_eta_scale;
     store_last_sample(paths, path_id, sample.pdf, sample.pdf_measure,
                       SampleSource::BSDF, sample.flags, item.position);
     paths.depth[path_id] += 1;
@@ -617,6 +627,7 @@ void launch_intersect_bvh(WavefrontRuntime& runtime,
                           PathStateView paths,
                           GpuBvhView bvh,
                           GpuScene scene,
+                          GpuRenderParams render_params,
                           WavefrontDebugViews debug,
                           int width,
                           int height,
@@ -624,7 +635,7 @@ void launch_intersect_bvh(WavefrontRuntime& runtime,
     intersect_bvh_kernel<<<grid_size(batch_size), WavefrontRuntime::kBlockSize>>>(
         runtime.ray_queue.view(),
         runtime.hit_queues.views(),
-        paths, bvh, scene, debug, width, height);
+        paths, bvh, scene, render_params, debug, width, height);
     check_cuda_or_throw("intersect_bvh_kernel");
 }
 
@@ -632,6 +643,7 @@ template <bool LogPaths>
 void launch_evaluate_hits_impl(WavefrontRuntime& runtime,
                                PathStateView paths,
                                GpuScene scene,
+                               GpuRenderParams render_params,
                                WavefrontDebugViews debug,
                                PathLogView path_log,
                                int width,
@@ -644,7 +656,7 @@ void launch_evaluate_hits_impl(WavefrontRuntime& runtime,
         <<<grid_size(batch_size), WavefrontRuntime::kBlockSize>>>( \
             runtime.hit_queues.storage(MaterialQueueKind::queue_name).view(), \
             runtime.next_ray_queue.view(), runtime.shadow_queue.view(), \
-            runtime.terminate_queue.view(), paths, scene, width, height, \
+            runtime.terminate_queue.view(), paths, scene, render_params, width, height, \
             wavefront_depth, max_depth, debug, path_log); \
     check_cuda_or_throw("evaluate_hit_kernel " label);
     LUX_WAVEFRONT_MATERIAL_QUEUE_LIST(LUX_LAUNCH_MATERIAL_QUEUE)
@@ -654,6 +666,7 @@ void launch_evaluate_hits_impl(WavefrontRuntime& runtime,
 void launch_evaluate_hits(WavefrontRuntime& runtime,
                           PathStateView paths,
                           GpuScene scene,
+                          GpuRenderParams render_params,
                           WavefrontDebugViews debug,
                           PathLogView path_log,
                           bool enable_path_log,
@@ -664,11 +677,11 @@ void launch_evaluate_hits(WavefrontRuntime& runtime,
                           int batch_size) {
     if (enable_path_log) {
         launch_evaluate_hits_impl<true>(
-            runtime, paths, scene, debug, path_log, width, height,
+            runtime, paths, scene, render_params, debug, path_log, width, height,
             wavefront_depth, max_depth, batch_size);
     } else {
         launch_evaluate_hits_impl<false>(
-            runtime, paths, scene, debug, path_log, width, height,
+            runtime, paths, scene, render_params, debug, path_log, width, height,
             wavefront_depth, max_depth, batch_size);
     }
 }

@@ -7,41 +7,91 @@
 #include "scene/gpu_scene_view.h"
 
 LuxDeviceInline Float light_pmf(GpuScene scene,
+                                LightSamplerKind sampler_kind,
                                 const LightSampleContext& ctx,
                                 int light_index) {
-    (void)ctx;
     if (light_index < 0 || light_index >= scene.generic_light_count
         || scene.total_light_power <= 0) {
         return 0;
+    }
+    if (sampler_kind == LightSamplerKind::Uniform) {
+        return Float(1) / Float(scene.generic_light_count);
+    }
+    if (sampler_kind == LightSamplerKind::Bvh
+        && scene.light_bvh_nodes
+        && scene.light_bvh_leaf_nodes
+        && scene.light_bvh_node_count > 0
+        && scene.light_bvh_root >= 0) {
+        return light_bvh_mixture_pmf(
+            scene.light_bvh_nodes,
+            scene.light_bvh_node_count,
+            scene.light_bvh_root,
+            scene.light_bvh_leaf_nodes,
+            scene.generic_light_count,
+            scene.non_bvh_light_indices,
+            scene.non_bvh_light_cdf,
+            scene.non_bvh_light_alias_table,
+            scene.non_bvh_light_count,
+            scene.non_bvh_light_power,
+            ctx,
+            light_index);
+    }
+    if (scene.light_power_alias_table) {
+        return alias_table_pmf(
+            scene.light_power_alias_table, scene.generic_light_count, light_index);
     }
     return cdf_interval_pmf(
         scene.light_power_cdf, scene.generic_light_count,
         scene.total_light_power, light_index);
 }
 
-LuxDeviceInline Float light_pmf(GpuScene scene, int light_index) {
-    return light_pmf(scene, LightSampleContext{}, light_index);
-}
-
 LuxDeviceInline SampledLight sample_scene_light(GpuScene scene,
+                                                LightSamplerKind sampler_kind,
                                                 const LightSampleContext& ctx,
                                                 Float select_u) {
     SampledLight sampled;
     if (scene.generic_light_count <= 0 || scene.total_light_power <= 0) return sampled;
 
-    int light_index = sample_cdf_index(
-        scene.light_power_cdf, scene.generic_light_count,
-        scene.total_light_power, select_u);
+    int light_index = -1;
+    Float selected_pmf = 0;
+    if (sampler_kind == LightSamplerKind::Uniform) {
+        light_index = static_cast<int>(
+            clamp_cdf_sample(select_u) * Float(scene.generic_light_count));
+        if (light_index >= scene.generic_light_count) {
+            light_index = scene.generic_light_count - 1;
+        }
+    } else if (sampler_kind == LightSamplerKind::Bvh
+               && scene.light_bvh_nodes
+               && scene.light_bvh_node_count > 0
+               && scene.light_bvh_root >= 0) {
+        light_index = sample_light_bvh_mixture(
+            scene.light_bvh_nodes,
+            scene.light_bvh_node_count,
+            scene.light_bvh_root,
+            scene.non_bvh_light_indices,
+            scene.non_bvh_light_cdf,
+            scene.non_bvh_light_alias_table,
+            scene.non_bvh_light_count,
+            scene.non_bvh_light_power,
+            ctx,
+            select_u,
+            selected_pmf);
+    } else {
+        light_index = scene.light_power_alias_table
+            ? sample_alias_table_index(
+                scene.light_power_alias_table, scene.generic_light_count, select_u)
+            : sample_cdf_index(
+                scene.light_power_cdf, scene.generic_light_count,
+                scene.total_light_power, select_u);
+    }
     if (light_index < 0) return sampled;
     sampled.light_index = light_index;
     sampled.light = scene.lights[light_index];
-    sampled.pmf = light_pmf(scene, ctx, light_index);
+    sampled.pmf = selected_pmf > 0
+        ? selected_pmf
+        : light_pmf(scene, sampler_kind, ctx, light_index);
     sampled.valid = sampled.pmf > 0;
     return sampled;
-}
-
-LuxDeviceInline SampledLight sample_scene_light(GpuScene scene, Float select_u) {
-    return sample_scene_light(scene, LightSampleContext{}, select_u);
 }
 
 LuxDeviceInline vec3 gpu_diffuse_area_light_emission_value(
@@ -52,9 +102,11 @@ LuxDeviceInline bool sample_area_light(GpuScene scene, Float select_u,
                                        LightSample& sample) {
     if (scene.light_count <= 0 || scene.total_light_area <= 0) return false;
 
-    int light_index = sample_cdf_index(
-        scene.light_area_cdf, scene.light_count,
-        scene.total_light_area, select_u);
+    int light_index = scene.light_area_alias_table
+        ? sample_alias_table_index(scene.light_area_alias_table, scene.light_count, select_u)
+        : sample_cdf_index(
+            scene.light_area_cdf, scene.light_count,
+            scene.total_light_area, select_u);
     if (light_index < 0) return false;
 
     PrimitiveRef light_ref = scene.light_primitive_refs[light_index];
@@ -79,11 +131,13 @@ LuxDeviceInline bool sample_area_light(GpuScene scene, Float select_u,
 }
 
 LuxDeviceInline LightLiSample sample_light_li(GpuScene scene,
+                                              LightSamplerKind sampler_kind,
                                               const LightSampleContext& ctx,
                                               Float light_select_u,
                                               Float light_component_u,
                                               const vec2& light_u) {
-    SampledLight sampled = sample_scene_light(scene, ctx, light_select_u);
+    SampledLight sampled = sample_scene_light(
+        scene, sampler_kind, ctx, light_select_u);
     LightLiSample li;
     if (!sampled.valid) return li;
 
@@ -146,13 +200,16 @@ LuxDeviceInline vec3 infinite_lights_le(GpuScene scene, const Ray& ray) {
     return Le;
 }
 
-LuxDeviceInline Float infinite_lights_pdf_li(GpuScene scene, const vec3& wi) {
+LuxDeviceInline Float infinite_lights_pdf_li(GpuScene scene,
+                                             LightSamplerKind sampler_kind,
+                                             const vec3& wi) {
     Float pdf = 0;
     LightSampleContext ctx;
     for (int light_index = 0; light_index < scene.generic_light_count; ++light_index) {
         const Light& light = scene.lights[light_index];
         if (light_type(light) != LightType::Infinite) continue;
-        pdf += light_pmf(scene, ctx, light_index) * light_pdf_li(light, ctx, wi);
+        pdf += light_pmf(scene, sampler_kind, ctx, light_index)
+            * light_pdf_li(light, ctx, wi);
     }
     return pdf;
 }
@@ -181,6 +238,21 @@ LuxDeviceInline vec3 surface_light_le(GpuScene scene,
                                       int triangle_id,
                                       const vec2& uv, const vec3& ng,
                                       const vec3& wo) {
+    if (scene.primitive_light_indices
+        && triangle_id >= 0
+        && triangle_id < scene.primitive_light_index_count) {
+        int mapped_light_index = scene.primitive_light_indices[triangle_id];
+        if (mapped_light_index >= 0 && mapped_light_index < scene.generic_light_count) {
+            const Light& light = scene.lights[mapped_light_index];
+            if (light.kind == LightKind::DiffuseArea
+                && gpu_area_light_matches(light.area, primitive_ref, triangle_id)) {
+                return eval_emission(
+                    gpu_diffuse_area_light_emission_value(scene, light.area, uv),
+                    light.area.sidedness, ng, wo);
+            }
+        }
+    }
+
     vec3 Le(0);
     bool found_area_light = false;
     for (int light_index = 0; light_index < scene.generic_light_count; ++light_index) {
@@ -212,6 +284,7 @@ LuxDeviceInline vec3 surface_light_le(GpuScene scene, int triangle_id,
 }
 
 LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene,
+                                                 LightSamplerKind sampler_kind,
                                                  PrimitiveRef primitive_ref,
                                                  int triangle_id,
                                                  const vec3& position,
@@ -220,6 +293,31 @@ LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene,
     int material_id = triangle.material_id;
     if (material_id < 0 || material_id >= scene.material_count) return 0;
     const Material& material = scene.materials[material_id];
+
+    if (scene.primitive_light_indices
+        && triangle_id >= 0
+        && triangle_id < scene.primitive_light_index_count) {
+        int mapped_light_index = scene.primitive_light_indices[triangle_id];
+        if (mapped_light_index >= 0 && mapped_light_index < scene.generic_light_count) {
+            const Light& candidate = scene.lights[mapped_light_index];
+            if (candidate.kind == LightKind::DiffuseArea
+                && gpu_area_light_matches(candidate.area, primitive_ref, triangle_id)
+                && candidate.area.area > 0) {
+                LightSample light;
+                light.triangle_id = triangle_id;
+                light.primitive_ref = primitive_ref;
+                light.position = position;
+                light.normal = triangle_normal(triangle.triangle);
+                light.emission = candidate.area.emission;
+                light.emission_sidedness = candidate.area.sidedness;
+                light.area = candidate.area.area;
+                light.pdf_area = Float(1) / candidate.area.area;
+                LightSampleContext ctx{reference_position, vec3(0), vec3(0)};
+                return light_pmf(scene, sampler_kind, ctx, mapped_light_index)
+                    * pdf_solid_angle(light, reference_position);
+            }
+        }
+    }
 
     Float generic_pdf = 0;
     for (int light_index = 0; light_index < scene.generic_light_count; ++light_index) {
@@ -239,7 +337,7 @@ LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene,
         light.area = candidate.area.area;
         light.pdf_area = Float(1) / candidate.area.area;
         LightSampleContext ctx{reference_position, vec3(0), vec3(0)};
-        generic_pdf += light_pmf(scene, ctx, light_index)
+        generic_pdf += light_pmf(scene, sampler_kind, ctx, light_index)
             * pdf_solid_angle(light, reference_position);
     }
     if (generic_pdf > 0) return generic_pdf;
@@ -258,12 +356,14 @@ LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene,
     return pdf_solid_angle(light, reference_position);
 }
 
-LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene, int triangle_id,
+LuxDeviceInline Float area_light_pdf_solid_angle(GpuScene scene,
+                                                 LightSamplerKind sampler_kind,
+                                                 int triangle_id,
                                                  const vec3& position,
                                                  const vec3& reference_position) {
     return area_light_pdf_solid_angle(
-        scene, gpu_scene_primitive_ref(scene, triangle_id), triangle_id,
-        position, reference_position);
+        scene, sampler_kind, gpu_scene_primitive_ref(scene, triangle_id),
+        triangle_id, position, reference_position);
 }
 
 #endif // LUX_SCENE_GPU_LIGHT_SAMPLER_CUH

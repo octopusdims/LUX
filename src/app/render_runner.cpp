@@ -325,6 +325,7 @@ int run_render(const RenderConfig& config) {
     }
     RenderSettings settings;
     settings.max_depth = config.max_depth;
+    settings.light_sampler_kind = config.light_sampler_kind;
     IntegratorKind integrator_kind = config.use_gpu
         ? IntegratorKind::WavefrontPathTracer
         : IntegratorKind::CpuPathTracer;
@@ -346,7 +347,7 @@ int run_render(const RenderConfig& config) {
 
     const Scene& host_scene = prepared_scene->host_scene();
     const Camera& camera = host_scene.camera;
-    const LightDistribution& scene_lights = prepared_scene->light_distribution();
+    const PreparedLightSampling& scene_light_sampling = prepared_scene->light_sampling();
     unsigned render_aov_mask = debug_request.has_aov()
         ? (debug_request.aov_mask & ~DebugAovOrientation)
         : 0;
@@ -372,7 +373,7 @@ int run_render(const RenderConfig& config) {
         bool handled = false;
         try {
             handled = run_cpu_diagnostic_request(
-                host_scene, *host_bvh, scene_lights, camera,
+                host_scene, *host_bvh, scene_light_sampling, camera,
                 config.width, config.height, settings, debug_request);
         } catch (const std::exception& error) {
             auto diagnostic_end = Clock::now();
@@ -394,7 +395,7 @@ int run_render(const RenderConfig& config) {
             auto diagnostic_start = Clock::now();
             try {
                 run_cpu_diagnostic_request(
-                    host_scene, *host_bvh, scene_lights, camera,
+                    host_scene, *host_bvh, scene_light_sampling, camera,
                     config.width, config.height, settings, orientation_request);
             } catch (const std::exception& error) {
                 auto diagnostic_end = Clock::now();

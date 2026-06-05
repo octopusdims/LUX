@@ -6,13 +6,13 @@
 #include "diagnostics/diagnostic_config.h"
 
 struct CpuBvh;
-struct LightDistribution;
+struct PreparedLightSampling;
 struct Camera;
 struct RenderSettings;
 struct Scene;
 
 bool run_cpu_diagnostic_request(const Scene& scene, const CpuBvh& bvh,
-                                const LightDistribution& lights,
+                                const PreparedLightSampling& light_sampling,
                                 const Camera& camera,
                                 int width, int height,
                                 const RenderSettings& settings,

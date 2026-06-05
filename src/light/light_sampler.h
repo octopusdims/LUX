@@ -6,6 +6,7 @@
 #include "core/constants.h"
 #include "core/vec2.cuh"
 #include "geometry/triangle_mesh_view.h"
+#include "light/light_distribution.h"
 #include "light/light.h"
 #include "material/bsdf.h"
 #include "sampler/sample_record.h"
@@ -65,6 +66,296 @@ LuxHDInline Float cdf_interval_pmf(const Float* cdf, int count,
                                    Float total_weight, int index) {
     if (total_weight <= 0) return 0;
     return cdf_interval_weight(cdf, count, index) / total_weight;
+}
+
+LuxHDInline int sample_alias_table_index(const AliasTableEntry* table,
+                                         int count,
+                                         Float u) {
+    if (table == nullptr || count <= 0) return -1;
+    Float scaled = clamp_cdf_sample(u) * Float(count);
+    int column = static_cast<int>(scaled);
+    if (column >= count) column = count - 1;
+    Float threshold = scaled - Float(column);
+    const AliasTableEntry& entry = table[column];
+    int index = threshold < entry.probability ? column : entry.alias;
+    return index >= 0 && index < count ? index : -1;
+}
+
+LuxHDInline Float alias_table_pmf(const AliasTableEntry* table,
+                                  int count,
+                                  int index) {
+    if (table == nullptr || index < 0 || index >= count) return 0;
+    return table[index].pmf;
+}
+
+LuxHDInline Float squared_distance_to_bounds(const AABB& bounds, const vec3& point) {
+    Float distance2 = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+        Float delta = 0;
+        if (point[axis] < bounds.p_min[axis]) {
+            delta = bounds.p_min[axis] - point[axis];
+        } else if (point[axis] > bounds.p_max[axis]) {
+            delta = point[axis] - bounds.p_max[axis];
+        }
+        distance2 += delta * delta;
+    }
+    return distance2;
+}
+
+LuxHDInline Float light_bvh_node_importance(const LightBvhNode* nodes,
+                                            int node_count,
+                                            int node_index,
+                                            const LightSampleContext& ctx) {
+    if (nodes == nullptr || node_index < 0 || node_index >= node_count) return 0;
+    const LightBvhNode& node = nodes[node_index];
+    if (node.power <= 0 || node.bounds.is_empty()) return 0;
+    Float distance2 = squared_distance_to_bounds(node.bounds, ctx.position);
+    distance2 = fmaxf(distance2, kRayEpsilon * kRayEpsilon);
+    return node.power / distance2;
+}
+
+LuxHDInline Float light_bvh_child_probability(const LightBvhNode* nodes,
+                                              int node_count,
+                                              int parent_index,
+                                              int child_index,
+                                              const LightSampleContext& ctx) {
+    if (nodes == nullptr
+        || parent_index < 0 || parent_index >= node_count
+        || child_index < 0 || child_index >= node_count) {
+        return 0;
+    }
+    const LightBvhNode& parent = nodes[parent_index];
+    if (child_index != parent.left && child_index != parent.right) return 0;
+
+    Float left_importance = light_bvh_node_importance(
+        nodes, node_count, parent.left, ctx);
+    Float right_importance = light_bvh_node_importance(
+        nodes, node_count, parent.right, ctx);
+    Float total_importance = left_importance + right_importance;
+    if (total_importance <= 0) return 0;
+
+    Float left_probability = left_importance / total_importance;
+    return child_index == parent.left ? left_probability
+                                      : Float(1) - left_probability;
+}
+
+LuxHDInline int sample_light_bvh(const LightBvhNode* nodes,
+                                 int node_count,
+                                 int root_index,
+                                 const LightSampleContext& ctx,
+                                 Float select_u,
+                                 Float& pmf) {
+    pmf = 0;
+    if (nodes == nullptr || root_index < 0 || root_index >= node_count) return -1;
+    int node_index = root_index;
+    Float u = clamp_cdf_sample(select_u);
+    pmf = 1;
+
+    for (int depth = 0; depth < node_count; ++depth) {
+        const LightBvhNode& node = nodes[node_index];
+        if (node.light_index >= 0) return node.light_index;
+
+        Float left_probability = light_bvh_child_probability(
+            nodes, node_count, node_index, node.left, ctx);
+        if (left_probability <= 0) {
+            node_index = node.right;
+            if (node_index < 0 || node_index >= node_count) {
+                pmf = 0;
+                return -1;
+            }
+            continue;
+        }
+        if (left_probability >= 1) {
+            node_index = node.left;
+            if (node_index < 0 || node_index >= node_count) {
+                pmf = 0;
+                return -1;
+            }
+            continue;
+        }
+
+        if (u < left_probability) {
+            pmf *= left_probability;
+            u /= left_probability;
+            node_index = node.left;
+        } else {
+            Float right_probability = Float(1) - left_probability;
+            pmf *= right_probability;
+            u = (u - left_probability) / right_probability;
+            node_index = node.right;
+        }
+        if (node_index < 0 || node_index >= node_count) {
+            pmf = 0;
+            return -1;
+        }
+    }
+
+    pmf = 0;
+    return -1;
+}
+
+LuxHDInline Float light_bvh_pmf(const LightBvhNode* nodes,
+                                int node_count,
+                                const int* leaf_nodes,
+                                int leaf_count,
+                                const LightSampleContext& ctx,
+                                int light_index) {
+    if (nodes == nullptr || leaf_nodes == nullptr
+        || light_index < 0 || light_index >= leaf_count) {
+        return 0;
+    }
+
+    int node_index = leaf_nodes[light_index];
+    if (node_index < 0 || node_index >= node_count) return 0;
+
+    Float pmf = 1;
+    for (int depth = 0; depth < node_count; ++depth) {
+        const LightBvhNode& node = nodes[node_index];
+        if (node.parent < 0) return pmf;
+        Float probability = light_bvh_child_probability(
+            nodes, node_count, node.parent, node_index, ctx);
+        if (probability <= 0) return 0;
+        pmf *= probability;
+        node_index = node.parent;
+        if (node_index < 0 || node_index >= node_count) return 0;
+    }
+    return 0;
+}
+
+LuxHDInline Float discrete_sampling_table_pmf(const Float* cdf,
+                                              const AliasTableEntry* alias_table,
+                                              int count,
+                                              Float total_weight,
+                                              int index) {
+    if (alias_table) return alias_table_pmf(alias_table, count, index);
+    return cdf_interval_pmf(cdf, count, total_weight, index);
+}
+
+LuxHDInline int find_light_index_slot(const int* light_indices,
+                                      int count,
+                                      int light_index) {
+    if (light_indices == nullptr || light_index < 0) return -1;
+    for (int i = 0; i < count; ++i) {
+        if (light_indices[i] == light_index) return i;
+    }
+    return -1;
+}
+
+LuxHDInline int sample_indexed_discrete_light(
+        const int* light_indices,
+        const Float* cdf,
+        const AliasTableEntry* alias_table,
+        int count,
+        Float total_weight,
+        Float select_u,
+        Float& pmf) {
+    pmf = 0;
+    if (light_indices == nullptr || count <= 0 || total_weight <= 0) return -1;
+    int slot = alias_table
+        ? sample_alias_table_index(alias_table, count, select_u)
+        : sample_cdf_index(cdf, count, total_weight, select_u);
+    if (slot < 0 || slot >= count) return -1;
+    pmf = discrete_sampling_table_pmf(
+        cdf, alias_table, count, total_weight, slot);
+    return pmf > 0 ? light_indices[slot] : -1;
+}
+
+LuxHDInline int sample_light_bvh_mixture(
+        const LightBvhNode* nodes,
+        int node_count,
+        int root_index,
+        const int* non_bvh_light_indices,
+        const Float* non_bvh_light_cdf,
+        const AliasTableEntry* non_bvh_light_alias_table,
+        int non_bvh_light_count,
+        Float non_bvh_light_power,
+        const LightSampleContext& ctx,
+        Float select_u,
+        Float& pmf) {
+    pmf = 0;
+    if (nodes == nullptr || root_index < 0 || root_index >= node_count) return -1;
+    Float bvh_power = nodes[root_index].power;
+    if (bvh_power <= 0) return -1;
+
+    Float non_bvh_power =
+        non_bvh_light_count > 0 ? fmaxf(Float(0), non_bvh_light_power) : Float(0);
+    Float total_power = bvh_power + non_bvh_power;
+    if (total_power <= 0) return -1;
+
+    Float bvh_group_p = bvh_power / total_power;
+    if (non_bvh_power <= 0 || bvh_group_p >= 1) {
+        return sample_light_bvh(
+            nodes, node_count, root_index, ctx, select_u, pmf);
+    }
+    if (bvh_group_p <= 0) {
+        return sample_indexed_discrete_light(
+            non_bvh_light_indices, non_bvh_light_cdf,
+            non_bvh_light_alias_table, non_bvh_light_count,
+            non_bvh_power, select_u, pmf);
+    }
+
+    Float u = clamp_cdf_sample(select_u);
+    if (u < bvh_group_p) {
+        Float local_u = u / bvh_group_p;
+        Float bvh_pmf = 0;
+        int light_index = sample_light_bvh(
+            nodes, node_count, root_index, ctx, local_u, bvh_pmf);
+        pmf = bvh_group_p * bvh_pmf;
+        return pmf > 0 ? light_index : -1;
+    }
+
+    Float non_bvh_group_p = Float(1) - bvh_group_p;
+    Float local_u = (u - bvh_group_p) / non_bvh_group_p;
+    Float non_bvh_pmf = 0;
+    int light_index = sample_indexed_discrete_light(
+        non_bvh_light_indices, non_bvh_light_cdf,
+        non_bvh_light_alias_table, non_bvh_light_count,
+        non_bvh_power, local_u, non_bvh_pmf);
+    pmf = non_bvh_group_p * non_bvh_pmf;
+    return pmf > 0 ? light_index : -1;
+}
+
+LuxHDInline Float light_bvh_mixture_pmf(
+        const LightBvhNode* nodes,
+        int node_count,
+        int root_index,
+        const int* leaf_nodes,
+        int leaf_count,
+        const int* non_bvh_light_indices,
+        const Float* non_bvh_light_cdf,
+        const AliasTableEntry* non_bvh_light_alias_table,
+        int non_bvh_light_count,
+        Float non_bvh_light_power,
+        const LightSampleContext& ctx,
+        int light_index) {
+    if (nodes == nullptr || root_index < 0 || root_index >= node_count
+        || light_index < 0) {
+        return 0;
+    }
+    Float bvh_power = nodes[root_index].power;
+    if (bvh_power <= 0) return 0;
+    Float non_bvh_power =
+        non_bvh_light_count > 0 ? fmaxf(Float(0), non_bvh_light_power) : Float(0);
+    Float total_power = bvh_power + non_bvh_power;
+    if (total_power <= 0) return 0;
+
+    Float bvh_group_p = bvh_power / total_power;
+    if (leaf_nodes && light_index < leaf_count
+        && leaf_nodes[light_index] >= 0) {
+        return bvh_group_p
+            * light_bvh_pmf(
+                nodes, node_count, leaf_nodes, leaf_count, ctx, light_index);
+    }
+
+    int non_bvh_slot = find_light_index_slot(
+        non_bvh_light_indices, non_bvh_light_count, light_index);
+    if (non_bvh_slot < 0 || non_bvh_power <= 0) return 0;
+
+    Float non_bvh_group_p = Float(1) - bvh_group_p;
+    return non_bvh_group_p
+        * discrete_sampling_table_pmf(
+            non_bvh_light_cdf, non_bvh_light_alias_table,
+            non_bvh_light_count, non_bvh_power, non_bvh_slot);
 }
 
 LuxHDInline vec3 sample_triangle_area(const Triangle& triangle, const vec2& u) {

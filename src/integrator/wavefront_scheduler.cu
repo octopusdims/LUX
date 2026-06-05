@@ -13,6 +13,7 @@ struct WavefrontFrameContext {
     PathStateView paths;
     GpuBvhView bvh;
     GpuScene scene;
+    GpuRenderParams render_params;
     WavefrontDebugViews debug;
     PathLogView path_log;
     int width = 0;
@@ -36,7 +37,8 @@ void generate_camera_stage(WavefrontRuntime& runtime,
 void intersect_stage(WavefrontRuntime& runtime,
                      const WavefrontFrameContext& context) {
     launch_intersect_bvh(
-        runtime, context.paths, context.bvh, context.scene, context.debug,
+        runtime, context.paths, context.bvh, context.scene, context.render_params,
+        context.debug,
         context.width, context.height, context.current_batch);
 }
 
@@ -44,8 +46,8 @@ void shade_baseline_stage(WavefrontRuntime& runtime,
                           const WavefrontFrameContext& context,
                           int wavefront_depth) {
     launch_evaluate_hits(
-        runtime, context.paths, context.scene, context.debug, context.path_log,
-        context.enable_path_log, context.width, context.height,
+        runtime, context.paths, context.scene, context.render_params, context.debug,
+        context.path_log, context.enable_path_log, context.width, context.height,
         wavefront_depth, context.max_depth, context.current_batch);
 }
 
@@ -79,6 +81,7 @@ void WavefrontRuntime::render_baseline_path_tracing(
     PathStateView paths_view = path_state();
     GpuBvhView bvh_view = scene.device_bvh();
     GpuScene scene_view = scene.device_scene();
+    GpuRenderParams render_params = make_gpu_render_params(settings);
     WavefrontDebugViews debug = debug_views();
 
     for (int s = 0; s < film.samples_per_pixel; ++s) {
@@ -91,6 +94,7 @@ void WavefrontRuntime::render_baseline_path_tracing(
                 paths_view,
                 bvh_view,
                 scene_view,
+                render_params,
                 debug,
                 path_log_view,
                 film.width,

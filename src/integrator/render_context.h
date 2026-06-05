@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "film/film.h"
+#include "light/light_distribution.h"
 #include "sampler/sampler.h"
 
 struct PathLogRecord;
@@ -19,7 +20,19 @@ struct RenderSettings {
     int frame_index = 0;
     int sample_offset = 0;
     SamplerKind sampler_kind = SamplerKind::Independent;
+    LightSamplerKind light_sampler_kind = LightSamplerKind::Power;
 };
+
+struct GpuRenderParams {
+    LightSamplerKind light_sampler_kind;
+
+    LuxHDInline explicit GpuRenderParams(LightSamplerKind kind)
+        : light_sampler_kind(kind) {}
+};
+
+LuxHDInline GpuRenderParams make_gpu_render_params(const RenderSettings& settings) {
+    return GpuRenderParams(settings.light_sampler_kind);
+}
 
 LuxHDInline SamplerConfig make_render_sampler_config(const RenderSettings& settings) {
     uint64_t frame = static_cast<uint64_t>(settings.frame_index);

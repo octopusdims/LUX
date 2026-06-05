@@ -11,6 +11,7 @@
 
 #include "core/types.h"
 #include "diagnostics/diagnostic_config.h"
+#include "light/light_distribution.h"
 
 enum class OutputMode {
     DefaultRunDirectory,
@@ -30,6 +31,7 @@ struct RenderConfig {
     bool use_gpu = false;
     bool show_timing = false;
     bool show_help = false;
+    LightSamplerKind light_sampler_kind = LightSamplerKind::Power;
     std::string executable_path;
 };
 
@@ -146,6 +148,22 @@ LuxInline bool parse_debug_mesh_mode(const char* text, DebugMeshMode& mode) {
     return false;
 }
 
+LuxInline bool parse_light_sampler_kind(const char* text, LightSamplerKind& kind) {
+    if (std::strcmp(text, "power") == 0) {
+        kind = LightSamplerKind::Power;
+        return true;
+    }
+    if (std::strcmp(text, "uniform") == 0) {
+        kind = LightSamplerKind::Uniform;
+        return true;
+    }
+    if (std::strcmp(text, "bvh") == 0) {
+        kind = LightSamplerKind::Bvh;
+        return true;
+    }
+    return false;
+}
+
 LuxInline bool validate_debug_request(const RenderConfig& config) {
     const DebugRequest& debug = config.debug;
     int categories = (debug.has_probe() ? 1 : 0)
@@ -228,6 +246,16 @@ LuxInline bool parse_render_config(int argc, char** argv, RenderConfig& config) 
 
         if (render_config_detail::is_option(arg, "-gpu", "--gpu")) {
             config.use_gpu = true;
+            continue;
+        }
+
+        if (render_config_detail::is_option(arg, "-light-sampler", "--light-sampler")) {
+            if (i + 1 >= argc) return false;
+            ++i;
+            if (!render_config_detail::parse_light_sampler_kind(
+                    argv[i], config.light_sampler_kind)) {
+                return false;
+            }
             continue;
         }
 
@@ -344,6 +372,7 @@ LuxInline void print_render_usage(const char* executable, const char* scene_name
     std::printf("  -out name           Write to out/name/name.ppm\n");
     std::printf("  -output path        Set exact PPM/PFM output path\n");
     std::printf("  -gpu                Use GPU wavefront path tracer\n");
+    std::printf("  -light-sampler kind Select light sampler: power, uniform, or bvh\n");
     std::printf("  -time               Print stage timing breakdown\n");
     std::printf("  -debug-probe X Y    Select a pixel for probe modes\n");
     std::printf("  -debug-mode mode    Probe mode: camera-hits, path, or nee\n");
