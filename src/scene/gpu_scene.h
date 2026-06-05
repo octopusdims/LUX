@@ -12,6 +12,7 @@
 #include "material/material.h"
 #include "scene.h"
 #include "scene/gpu_scene_view.h"
+#include "scene/scene_prepare.h"
 
 // Host-side owner of device scene data. Creates GpuScene POD on demand.
 struct GpuSceneData {
@@ -19,8 +20,16 @@ struct GpuSceneData {
     thrust::device_vector<PrimitiveRef> d_light_primitive_refs;
     thrust::device_vector<Float> d_light_primitive_areas;
     thrust::device_vector<Float> d_light_area_cdf;
+    thrust::device_vector<AliasTableEntry> d_light_area_alias_table;
     thrust::device_vector<Light> d_lights;
     thrust::device_vector<Float> d_light_power_cdf;
+    thrust::device_vector<AliasTableEntry> d_light_power_alias_table;
+    thrust::device_vector<LightBvhNode> d_light_bvh_nodes;
+    thrust::device_vector<int> d_light_bvh_leaf_nodes;
+    thrust::device_vector<int> d_non_bvh_light_indices;
+    thrust::device_vector<Float> d_non_bvh_light_cdf;
+    thrust::device_vector<AliasTableEntry> d_non_bvh_light_alias_table;
+    thrust::device_vector<int> d_primitive_light_indices;
     thrust::device_vector<vec3> d_image_light_pixels;
     thrust::device_vector<Float> d_image_light_cdfs;
     thrust::device_vector<GpuImageAsset> d_image_assets;
@@ -36,21 +45,33 @@ struct GpuSceneData {
     thrust::device_vector<GpuBvhView> d_blas_views;
     Float total_light_area = 0;
     Float total_light_power = 0;
+    Float non_bvh_light_power = 0;
+    int light_bvh_root = -1;
     bool two_level_enabled = false;
     Camera scene_camera;
 
     GpuSceneData() = default;
 
-    GpuSceneData(const Scene& scene, const LightDistribution& light_distribution) {
-        upload(scene, light_distribution);
+    GpuSceneData(const Scene& scene, const PreparedLightSampling& light_sampling) {
+        upload(scene, light_sampling);
     }
 
-    void upload(const Scene& scene, const LightDistribution& light_distribution) {
+    void upload(const Scene& scene, const PreparedLightSampling& light_sampling) {
+        require_prepared_light_sampling_current(
+            scene, light_sampling,
+            "GpuSceneData requires PreparedLightSampling built from the current Scene");
+        const AreaLightSamplingTable& area_lights = light_sampling.area_lights;
+        const LightSelectionTable& light_selection = light_sampling.light_selection;
+        const DiscreteSamplingTable& area_distribution = area_lights.area_distribution;
+        const DiscreteSamplingTable& power_distribution = light_selection.power_distribution;
+        const LightBvhTable& light_bvh = light_sampling.light_bvh;
+        const SurfaceLightLookupTable& surface_lookup = light_sampling.surface_lookup;
         scene_camera = scene.camera;
         d_materials = scene.materials;
-        d_light_primitive_refs = light_distribution.primitive_refs;
-        d_light_primitive_areas = light_distribution.primitive_areas;
-        d_light_area_cdf = light_distribution.area_cdf;
+        d_light_primitive_refs = area_lights.primitive_refs;
+        d_light_primitive_areas = area_lights.primitive_areas;
+        d_light_area_cdf = area_distribution.cdf;
+        d_light_area_alias_table = area_distribution.alias_table;
         two_level_enabled = false;
         d_blas_views.clear();
 
@@ -189,10 +210,10 @@ struct GpuSceneData {
         std::vector<Light> gpu_lights;
         std::vector<Float> gpu_light_power_cdf;
         Float gpu_light_power = 0;
-        gpu_lights.reserve(light_distribution.lights.size());
-        gpu_light_power_cdf.reserve(light_distribution.light_power_cdf.size());
-        for (int i = 0; i < static_cast<int>(light_distribution.lights.size()); ++i) {
-            Light light = light_distribution.lights[i];
+        gpu_lights.reserve(light_selection.lights.size());
+        gpu_light_power_cdf.reserve(power_distribution.cdf.size());
+        for (int i = 0; i < static_cast<int>(light_selection.lights.size()); ++i) {
+            Light light = light_selection.lights[i];
             if (light.kind == LightKind::ImageInfinite) {
                 int image_id = light.image_infinite.image_id;
                 if (image_id < 0
@@ -206,8 +227,8 @@ struct GpuSceneData {
                 light.image_infinite.cdf =
                     image_cdfs_device + image_cdf_offsets[image_id];
             }
-            Float previous = i == 0 ? 0 : light_distribution.light_power_cdf[i - 1];
-            Float power = light_distribution.light_power_cdf[i] - previous;
+            Float previous = i == 0 ? 0 : power_distribution.cdf[i - 1];
+            Float power = power_distribution.cdf[i] - previous;
             if (power <= 0) continue;
             gpu_light_power += power;
             gpu_lights.push_back(light);
@@ -215,7 +236,30 @@ struct GpuSceneData {
         }
         d_lights = gpu_lights;
         d_light_power_cdf = gpu_light_power_cdf;
-        total_light_area = light_distribution.total_area;
+        d_light_power_alias_table =
+            build_alias_table_from_cdf(gpu_light_power_cdf, gpu_light_power);
+        if (gpu_lights.size() == light_selection.lights.size()) {
+            d_light_bvh_nodes = light_bvh.nodes;
+            d_light_bvh_leaf_nodes = light_bvh.leaf_nodes_by_light_index;
+            d_non_bvh_light_indices = light_bvh.non_bvh_light_indices;
+            d_non_bvh_light_cdf = light_bvh.non_bvh_light_distribution.cdf;
+            d_non_bvh_light_alias_table =
+                light_bvh.non_bvh_light_distribution.alias_table;
+            d_primitive_light_indices = surface_lookup.primitive_light_indices;
+            light_bvh_root = light_bvh.root;
+            non_bvh_light_power =
+                light_bvh.non_bvh_light_distribution.total_weight;
+        } else {
+            d_light_bvh_nodes.clear();
+            d_light_bvh_leaf_nodes.clear();
+            d_non_bvh_light_indices.clear();
+            d_non_bvh_light_cdf.clear();
+            d_non_bvh_light_alias_table.clear();
+            d_primitive_light_indices.clear();
+            light_bvh_root = -1;
+            non_bvh_light_power = 0;
+        }
+        total_light_area = area_distribution.total_weight;
         total_light_power = gpu_light_power;
     }
 
@@ -235,12 +279,27 @@ struct GpuSceneData {
             d_light_primitive_refs.empty() ? nullptr : thrust::raw_pointer_cast(d_light_primitive_refs.data()),
             d_light_primitive_areas.empty() ? nullptr : thrust::raw_pointer_cast(d_light_primitive_areas.data()),
             d_light_area_cdf.empty() ? nullptr : thrust::raw_pointer_cast(d_light_area_cdf.data()),
+            d_light_area_alias_table.empty() ? nullptr : thrust::raw_pointer_cast(d_light_area_alias_table.data()),
             static_cast<int>(d_light_primitive_refs.size()),
             total_light_area,
             d_lights.empty() ? nullptr : thrust::raw_pointer_cast(d_lights.data()),
             d_light_power_cdf.empty() ? nullptr : thrust::raw_pointer_cast(d_light_power_cdf.data()),
+            d_light_power_alias_table.empty() ? nullptr : thrust::raw_pointer_cast(d_light_power_alias_table.data()),
             static_cast<int>(d_lights.size()),
             total_light_power,
+            d_light_bvh_nodes.empty() ? nullptr : thrust::raw_pointer_cast(d_light_bvh_nodes.data()),
+            d_light_bvh_leaf_nodes.empty() ? nullptr : thrust::raw_pointer_cast(d_light_bvh_leaf_nodes.data()),
+            static_cast<int>(d_light_bvh_nodes.size()),
+            light_bvh_root,
+            d_non_bvh_light_indices.empty() ? nullptr : thrust::raw_pointer_cast(d_non_bvh_light_indices.data()),
+            d_non_bvh_light_cdf.empty() ? nullptr : thrust::raw_pointer_cast(d_non_bvh_light_cdf.data()),
+            d_non_bvh_light_alias_table.empty() ? nullptr : thrust::raw_pointer_cast(d_non_bvh_light_alias_table.data()),
+            static_cast<int>(d_non_bvh_light_indices.size()),
+            non_bvh_light_power,
+            d_primitive_light_indices.empty()
+                ? nullptr
+                : thrust::raw_pointer_cast(d_primitive_light_indices.data()),
+            static_cast<int>(d_primitive_light_indices.size()),
             d_meshes.empty() ? nullptr : thrust::raw_pointer_cast(d_meshes.data()),
             static_cast<int>(d_meshes.size()),
             d_instances.empty() ? nullptr : thrust::raw_pointer_cast(d_instances.data()),

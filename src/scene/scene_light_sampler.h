@@ -15,46 +15,18 @@
 
 struct SceneLightSampler {
     const Scene* scene = nullptr;
-    const LightDistribution* distribution = nullptr;
-    std::uint64_t scene_revision = 0;
+    const PreparedLightSampling* light_sampling = nullptr;
+    SceneStamp source_scene;
+    LightSamplerKind sampler_kind = LightSamplerKind::Power;
 
     bool empty() const;
 };
 
 namespace scene_light_sampler_detail {
 
-LuxInline bool close_float(Float a, Float b) {
-    Float scale = fmaxf(Float(1), fmaxf(fabsf(a), fabsf(b)));
-    return fabsf(a - b) <= Float(1e-5) * scale;
-}
-
-LuxInline bool same_distribution(const LightDistribution& actual,
-                                 const LightDistribution& expected) {
-    if (actual.primitive_refs.size() != expected.primitive_refs.size()
-        || actual.primitive_areas.size() != expected.primitive_areas.size()
-        || actual.area_cdf.size() != expected.area_cdf.size()
-        || actual.lights.size() != expected.lights.size()
-        || actual.light_power_cdf.size() != expected.light_power_cdf.size()) {
-        return false;
-    }
-    if (!close_float(actual.total_area, expected.total_area)) return false;
-    if (!close_float(actual.total_light_power, expected.total_light_power)) return false;
-
-    for (std::size_t i = 0; i < expected.primitive_refs.size(); ++i) {
-        if (!same_primitive_ref(actual.primitive_refs[i], expected.primitive_refs[i])) return false;
-        if (!close_float(actual.primitive_areas[i], expected.primitive_areas[i])) return false;
-        if (!close_float(actual.area_cdf[i], expected.area_cdf[i])) return false;
-    }
-    for (std::size_t i = 0; i < expected.lights.size(); ++i) {
-        if (actual.lights[i].kind != expected.lights[i].kind) return false;
-        if (!close_float(actual.light_power_cdf[i], expected.light_power_cdf[i])) return false;
-    }
-    return true;
-}
-
 LuxInline void require_current(const SceneLightSampler& sampler) {
     if (sampler.scene == nullptr) return;
-    if (sampler.scene->revision != sampler.scene_revision) {
+    if (!sampler.source_scene.matches(scene_stamp(*sampler.scene))) {
         throw std::runtime_error(
             "SceneLightSampler cannot be used after its Scene has been modified");
     }
@@ -64,36 +36,42 @@ LuxInline void require_current(const SceneLightSampler& sampler) {
 
 LuxInline bool SceneLightSampler::empty() const {
     scene_light_sampler_detail::require_current(*this);
-    return distribution == nullptr || distribution->empty();
+    return light_sampling == nullptr || light_sampling->empty();
 }
 
 LuxInline SceneLightSampler make_scene_light_sampler(
         const Scene& scene,
-        const LightDistribution& distribution) {
-    LightDistribution expected = build_scene_light_distribution(scene);
-    if (!scene_light_sampler_detail::same_distribution(distribution, expected)) {
-        throw std::runtime_error(
-            "SceneLightSampler requires a LightDistribution built from the current Scene");
-    }
-    return SceneLightSampler{&scene, &distribution, scene.revision};
+        const PreparedLightSampling& light_sampling,
+        LightSamplerKind sampler_kind = LightSamplerKind::Power) {
+    require_prepared_light_sampling_current(
+        scene, light_sampling,
+        "SceneLightSampler requires PreparedLightSampling built from the current Scene");
+    return SceneLightSampler{
+        &scene, &light_sampling, scene_stamp(scene), sampler_kind};
 }
 
 LuxInline bool sample_area_light(const SceneLightSampler& sampler,
                                  Float select_u, const vec2& surface_u,
                                  LightSample& sample) {
-    if (sampler.scene == nullptr || sampler.distribution == nullptr) return false;
+    if (sampler.scene == nullptr || sampler.light_sampling == nullptr) return false;
     scene_light_sampler_detail::require_current(sampler);
     const Scene& scene = *sampler.scene;
-    const LightDistribution& distribution = *sampler.distribution;
-    if (distribution.primitive_refs.empty() || distribution.total_area <= 0) return false;
+    const AreaLightSamplingTable& area_lights = sampler.light_sampling->area_lights;
+    const DiscreteSamplingTable& area_distribution = area_lights.area_distribution;
+    if (area_lights.primitive_refs.empty() || area_distribution.total_weight <= 0) return false;
 
-    int light_index = sample_cdf_index(
-        distribution.area_cdf.data(),
-        static_cast<int>(distribution.area_cdf.size()),
-        distribution.total_area, select_u);
+    int light_index = area_distribution.alias_table.empty()
+        ? sample_cdf_index(
+            area_distribution.cdf.data(),
+            static_cast<int>(area_distribution.cdf.size()),
+            area_distribution.total_weight, select_u)
+        : sample_alias_table_index(
+            area_distribution.alias_table.data(),
+            static_cast<int>(area_distribution.alias_table.size()),
+            select_u);
     if (light_index < 0) return false;
 
-    PrimitiveRef light_ref = distribution.primitive_refs[light_index];
+    PrimitiveRef light_ref = area_lights.primitive_refs[light_index];
     int light_triangle_id = scene_primitive_index(scene, light_ref);
     SceneTriangle light_triangle = scene_triangle_view(scene, light_ref);
     if (light_triangle.material_id < 0
@@ -110,8 +88,8 @@ LuxInline bool sample_area_light(const SceneLightSampler& sampler,
     sample.uv = interpolate_triangle_uv(light_triangle, bary_uv.x, bary_uv.y);
     sample.emission = scene_material_emission_value(scene, material, sample.uv);
     sample.emission_sidedness = material.emission_sidedness;
-    sample.area = distribution.primitive_areas[light_index];
-    sample.pdf_area = Float(1) / distribution.total_area;
+    sample.area = area_lights.primitive_areas[light_index];
+    sample.pdf_area = Float(1) / area_distribution.total_weight;
     return sample.area > 0 && max_component(sample.emission) > 0;
 }
 
@@ -123,19 +101,52 @@ LuxInline SampledLight sample_light(const SceneLightSampler& sampler,
                                     const LightSampleContext& ctx,
                                     Float select_u) {
     SampledLight sampled;
-    if (sampler.distribution == nullptr) return sampled;
+    if (sampler.light_sampling == nullptr) return sampled;
     scene_light_sampler_detail::require_current(sampler);
-    const LightDistribution& distribution = *sampler.distribution;
-    if (distribution.lights.empty() || distribution.total_light_power <= 0) return sampled;
+    const LightSelectionTable& selection = sampler.light_sampling->light_selection;
+    const DiscreteSamplingTable& power_distribution = selection.power_distribution;
+    const LightBvhTable& bvh = sampler.light_sampling->light_bvh;
+    if (selection.lights.empty() || power_distribution.total_weight <= 0) return sampled;
 
-    int light_index = sample_cdf_index(
-        distribution.light_power_cdf.data(),
-        static_cast<int>(distribution.light_power_cdf.size()),
-        distribution.total_light_power, select_u);
+    int light_index = -1;
+    Float selected_pmf = 0;
+    if (sampler.sampler_kind == LightSamplerKind::Uniform) {
+        light_index = static_cast<int>(
+            clamp_cdf_sample(select_u) * Float(selection.lights.size()));
+        if (light_index >= static_cast<int>(selection.lights.size())) {
+            light_index = static_cast<int>(selection.lights.size()) - 1;
+        }
+    } else if (sampler.sampler_kind == LightSamplerKind::Bvh
+               && bvh.valid()) {
+        light_index = sample_light_bvh_mixture(
+            bvh.nodes.data(),
+            static_cast<int>(bvh.nodes.size()),
+            bvh.root,
+            bvh.non_bvh_light_indices.data(),
+            bvh.non_bvh_light_distribution.cdf.data(),
+            bvh.non_bvh_light_distribution.alias_table.empty()
+                ? nullptr
+                : bvh.non_bvh_light_distribution.alias_table.data(),
+            static_cast<int>(bvh.non_bvh_light_indices.size()),
+            bvh.non_bvh_light_distribution.total_weight,
+            ctx,
+            select_u,
+            selected_pmf);
+    } else {
+        light_index = power_distribution.alias_table.empty()
+            ? sample_cdf_index(
+                power_distribution.cdf.data(),
+                static_cast<int>(power_distribution.cdf.size()),
+                power_distribution.total_weight, select_u)
+            : sample_alias_table_index(
+                power_distribution.alias_table.data(),
+                static_cast<int>(power_distribution.alias_table.size()),
+                select_u);
+    }
     if (light_index < 0) return sampled;
     sampled.light_index = light_index;
-    sampled.light = distribution.lights[light_index];
-    sampled.pmf = light_pmf(sampler, ctx, light_index);
+    sampled.light = selection.lights[light_index];
+    sampled.pmf = selected_pmf > 0 ? selected_pmf : light_pmf(sampler, ctx, light_index);
     sampled.valid = sampled.pmf > 0;
     return sampled;
 }
@@ -147,18 +158,46 @@ LuxInline SampledLight sample_light(const SceneLightSampler& sampler, Float sele
 LuxInline Float light_pmf(const SceneLightSampler& sampler,
                           const LightSampleContext& ctx,
                           int light_index) {
-    (void)ctx;
-    if (sampler.distribution == nullptr) return 0;
+    if (sampler.light_sampling == nullptr) return 0;
     scene_light_sampler_detail::require_current(sampler);
-    const LightDistribution& distribution = *sampler.distribution;
-    if (light_index < 0 || light_index >= static_cast<int>(distribution.lights.size())
-        || distribution.total_light_power <= 0) {
+    const LightSelectionTable& selection = sampler.light_sampling->light_selection;
+    const DiscreteSamplingTable& power_distribution = selection.power_distribution;
+    const LightBvhTable& bvh = sampler.light_sampling->light_bvh;
+    if (light_index < 0 || light_index >= static_cast<int>(selection.lights.size())
+        || power_distribution.total_weight <= 0) {
         return 0;
     }
+    if (sampler.sampler_kind == LightSamplerKind::Uniform) {
+        return Float(1) / Float(selection.lights.size());
+    }
+    if (sampler.sampler_kind == LightSamplerKind::Bvh
+        && bvh.valid()) {
+        return light_bvh_mixture_pmf(
+            bvh.nodes.data(),
+            static_cast<int>(bvh.nodes.size()),
+            bvh.root,
+            bvh.leaf_nodes_by_light_index.data(),
+            static_cast<int>(bvh.leaf_nodes_by_light_index.size()),
+            bvh.non_bvh_light_indices.data(),
+            bvh.non_bvh_light_distribution.cdf.data(),
+            bvh.non_bvh_light_distribution.alias_table.empty()
+                ? nullptr
+                : bvh.non_bvh_light_distribution.alias_table.data(),
+            static_cast<int>(bvh.non_bvh_light_indices.size()),
+            bvh.non_bvh_light_distribution.total_weight,
+            ctx,
+            light_index);
+    }
+    if (!power_distribution.alias_table.empty()) {
+        return alias_table_pmf(
+            power_distribution.alias_table.data(),
+            static_cast<int>(power_distribution.alias_table.size()),
+            light_index);
+    }
     return cdf_interval_pmf(
-        distribution.light_power_cdf.data(),
-        static_cast<int>(distribution.light_power_cdf.size()),
-        distribution.total_light_power, light_index);
+        power_distribution.cdf.data(),
+        static_cast<int>(power_distribution.cdf.size()),
+        power_distribution.total_weight, light_index);
 }
 
 LuxInline Float light_pmf(const SceneLightSampler& sampler, int light_index) {
@@ -226,25 +265,25 @@ LuxInline LightLiSample sample_light_li(const SceneLightSampler& sampler,
 }
 
 LuxInline vec3 infinite_lights_le(const SceneLightSampler& sampler, const Ray& ray) {
-    if (sampler.distribution == nullptr) return vec3(0);
+    if (sampler.light_sampling == nullptr) return vec3(0);
     scene_light_sampler_detail::require_current(sampler);
     vec3 Le(0);
-    const LightDistribution& distribution = *sampler.distribution;
-    for (const Light& light : distribution.lights) {
+    const LightSelectionTable& selection = sampler.light_sampling->light_selection;
+    for (const Light& light : selection.lights) {
         Le += infinite_light_le(light, ray);
     }
     return Le;
 }
 
 LuxInline Float infinite_lights_pdf_li(const SceneLightSampler& sampler, const vec3& wi) {
-    if (sampler.distribution == nullptr) return 0;
+    if (sampler.light_sampling == nullptr) return 0;
     scene_light_sampler_detail::require_current(sampler);
-    const LightDistribution& distribution = *sampler.distribution;
+    const LightSelectionTable& selection = sampler.light_sampling->light_selection;
     Float pdf = 0;
     LightSampleContext ctx;
-    for (int light_index = 0; light_index < static_cast<int>(distribution.lights.size());
+    for (int light_index = 0; light_index < static_cast<int>(selection.lights.size());
          ++light_index) {
-        const Light& light = distribution.lights[light_index];
+        const Light& light = selection.lights[light_index];
         if (light_type(light) != LightType::Infinite) continue;
         pdf += light_pmf(sampler, ctx, light_index) * light_pdf_li(light, ctx, wi);
     }
@@ -281,14 +320,30 @@ LuxInline vec3 surface_light_le(const SceneLightSampler& sampler,
                                 const vec2& uv,
                                 const vec3& ng,
                                 const vec3& wo) {
-    if (sampler.scene == nullptr || sampler.distribution == nullptr) return vec3(0);
+    if (sampler.scene == nullptr || sampler.light_sampling == nullptr) return vec3(0);
     scene_light_sampler_detail::require_current(sampler);
     const Scene& scene = *sampler.scene;
-    const LightDistribution& distribution = *sampler.distribution;
+    const LightSelectionTable& selection = sampler.light_sampling->light_selection;
+    const SurfaceLightLookupTable& lookup = sampler.light_sampling->surface_lookup;
+
+    if (triangle_id >= 0
+        && triangle_id < static_cast<int>(lookup.primitive_light_indices.size())) {
+        int mapped_light_index = lookup.primitive_light_indices[triangle_id];
+        if (mapped_light_index >= 0
+            && mapped_light_index < static_cast<int>(selection.lights.size())) {
+            const Light& light = selection.lights[mapped_light_index];
+            if (light.kind == LightKind::DiffuseArea
+                && area_light_matches(light.area, primitive_ref, triangle_id)) {
+                return eval_emission(
+                    diffuse_area_light_emission_value(scene, light.area, uv),
+                    light.area.sidedness, ng, wo);
+            }
+        }
+    }
 
     vec3 Le(0);
     bool found_area_light = false;
-    for (const Light& light : distribution.lights) {
+    for (const Light& light : selection.lights) {
         if (light.kind != LightKind::DiffuseArea
             || !area_light_matches(light.area, primitive_ref, triangle_id)) {
             continue;
@@ -327,10 +382,12 @@ LuxInline Float area_light_pdf_solid_angle(const SceneLightSampler& sampler,
                                            int triangle_id,
                                            const vec3& position,
                                            const vec3& reference_position) {
-    if (sampler.scene == nullptr || sampler.distribution == nullptr) return 0;
+    if (sampler.scene == nullptr || sampler.light_sampling == nullptr) return 0;
     scene_light_sampler_detail::require_current(sampler);
     const Scene& scene = *sampler.scene;
-    const LightDistribution& distribution = *sampler.distribution;
+    const PreparedLightSampling& light_sampling = *sampler.light_sampling;
+    const LightSelectionTable& selection = light_sampling.light_selection;
+    const SurfaceLightLookupTable& lookup = light_sampling.surface_lookup;
     if (!scene_primitive_ref_exists(scene, primitive_ref)) return 0;
     SceneTriangle triangle = scene_triangle_view(scene, primitive_ref);
     if (triangle.material_id < 0
@@ -339,10 +396,36 @@ LuxInline Float area_light_pdf_solid_angle(const SceneLightSampler& sampler,
     }
     const Material& material = scene.materials[triangle.material_id];
 
+    if (triangle_id >= 0
+        && triangle_id < static_cast<int>(lookup.primitive_light_indices.size())) {
+        int mapped_light_index = lookup.primitive_light_indices[triangle_id];
+        if (mapped_light_index >= 0
+            && mapped_light_index < static_cast<int>(selection.lights.size())) {
+            const Light& candidate = selection.lights[mapped_light_index];
+            if (candidate.kind == LightKind::DiffuseArea
+                && area_light_matches(candidate.area, primitive_ref, triangle_id)
+                && candidate.area.area > 0) {
+                LightSample light;
+                light.triangle_id = triangle_id;
+                light.primitive_ref = primitive_ref;
+                light.position = position;
+                light.normal = triangle_normal(triangle.triangle);
+                light.uv = interpolate_triangle_uv(triangle, 0, 0);
+                light.emission = candidate.area.emission;
+                light.emission_sidedness = candidate.area.sidedness;
+                light.area = candidate.area.area;
+                light.pdf_area = Float(1) / candidate.area.area;
+                LightSampleContext ctx{reference_position, vec3(0), vec3(0)};
+                return light_pmf(sampler, ctx, mapped_light_index)
+                    * pdf_solid_angle(light, reference_position);
+            }
+        }
+    }
+
     Float generic_pdf = 0;
-    for (int light_index = 0; light_index < static_cast<int>(distribution.lights.size());
+    for (int light_index = 0; light_index < static_cast<int>(selection.lights.size());
         ++light_index) {
-        const Light& candidate = distribution.lights[light_index];
+        const Light& candidate = selection.lights[light_index];
         if (candidate.kind != LightKind::DiffuseArea
             || !area_light_matches(candidate.area, primitive_ref, triangle_id)
             || candidate.area.area <= 0) {
@@ -364,7 +447,9 @@ LuxInline Float area_light_pdf_solid_angle(const SceneLightSampler& sampler,
     }
     if (generic_pdf > 0) return generic_pdf;
     if (!material.is_emissive()) return 0;
-    if (distribution.total_area <= 0) return 0;
+    const DiscreteSamplingTable& area_distribution =
+        light_sampling.area_lights.area_distribution;
+    if (area_distribution.total_weight <= 0) return 0;
 
     LightSample light;
     light.triangle_id = triangle_id;
@@ -374,7 +459,7 @@ LuxInline Float area_light_pdf_solid_angle(const SceneLightSampler& sampler,
     light.emission = material.emission;
     light.emission_sidedness = material.emission_sidedness;
     light.area = triangle_area(triangle.triangle);
-    light.pdf_area = Float(1) / distribution.total_area;
+    light.pdf_area = Float(1) / area_distribution.total_weight;
     return pdf_solid_angle(light, reference_position);
 }
 

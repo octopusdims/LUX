@@ -19,7 +19,7 @@ struct PreparedSceneGpuStorage {
 PreparedScene::PreparedScene(Scene scene)
     : scene_(std::move(scene)), gpu_(std::make_unique<PreparedSceneGpuStorage>()) {
     finalize_scene(scene_);
-    light_distribution_ = build_scene_light_distribution(scene_);
+    light_sampling_ = prepare_scene_light_sampling(scene_);
 }
 
 PreparedScene::~PreparedScene() = default;
@@ -28,8 +28,8 @@ const Scene& PreparedScene::host_scene() const {
     return scene_;
 }
 
-const LightDistribution& PreparedScene::light_distribution() const {
-    return light_distribution_;
+const PreparedLightSampling& PreparedScene::light_sampling() const {
+    return light_sampling_;
 }
 
 void PreparedScene::prepare_host_bvh() const {
@@ -59,7 +59,7 @@ const CpuBvh& PreparedScene::host_bvh() const {
 }
 
 void PreparedScene::prepare_gpu() {
-    gpu_->scene_data.upload(scene_, light_distribution_);
+    gpu_->scene_data.upload(scene_, light_sampling_);
     gpu_->blas_bvhs.clear();
     gpu_->blas_bvhs.reserve(scene_.mesh_assets.size());
     for (int mesh_id = 0; mesh_id < static_cast<int>(scene_.mesh_assets.size()); ++mesh_id) {

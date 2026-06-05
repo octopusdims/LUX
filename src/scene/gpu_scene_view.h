@@ -7,6 +7,7 @@
 #include "core/types.h"
 #include "camera/camera.h"
 #include "geometry/triangle_mesh_view.h"
+#include "light/light_distribution.h"
 #include "light/light.h"
 #include "scene/primitive_ref.h"
 
@@ -56,12 +57,25 @@ struct GpuScene {
     const PrimitiveRef* light_primitive_refs = nullptr;
     const Float* light_primitive_areas = nullptr;
     const Float* light_area_cdf = nullptr;
+    const AliasTableEntry* light_area_alias_table = nullptr;
     int light_count = 0;
     Float total_light_area = 0;
     const Light* lights = nullptr;
     const Float* light_power_cdf = nullptr;
+    const AliasTableEntry* light_power_alias_table = nullptr;
     int generic_light_count = 0;
     Float total_light_power = 0;
+    const LightBvhNode* light_bvh_nodes = nullptr;
+    const int* light_bvh_leaf_nodes = nullptr;
+    int light_bvh_node_count = 0;
+    int light_bvh_root = -1;
+    const int* non_bvh_light_indices = nullptr;
+    const Float* non_bvh_light_cdf = nullptr;
+    const AliasTableEntry* non_bvh_light_alias_table = nullptr;
+    int non_bvh_light_count = 0;
+    Float non_bvh_light_power = 0;
+    const int* primitive_light_indices = nullptr;
+    int primitive_light_index_count = 0;
     const GpuSceneMesh* meshes = nullptr;
     int mesh_count = 0;
     const GpuSceneInstance* instances = nullptr;

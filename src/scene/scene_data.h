@@ -3,6 +3,7 @@
 #ifndef LUX_SCENE_DATA_H
 #define LUX_SCENE_DATA_H
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -21,6 +22,7 @@
 #include "light/light.h"
 #include "material/material.h"
 #include "scene/primitive_ref.h"
+#include "scene/scene_stamp.h"
 
 struct SceneTriangle {
     Triangle triangle;
@@ -68,7 +70,75 @@ struct ScenePrimitive {
     int ordinal = -1;
 };
 
+LuxInline std::uint64_t next_scene_identity() {
+    static std::atomic<std::uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 struct Scene {
+    Scene() = default;
+
+    Scene(const Scene& other)
+        : materials(other.materials),
+          mesh_assets(other.mesh_assets),
+          instances(other.instances),
+          default_mesh_id(other.default_mesh_id),
+          default_instance_id(other.default_instance_id),
+          lights(other.lights),
+          image_light_assets(other.image_light_assets),
+          camera(other.camera),
+          bounds(other.bounds),
+          revision(other.revision),
+          identity(next_scene_identity()) {}
+
+    Scene& operator=(const Scene& other) {
+        if (this == &other) return *this;
+        materials = other.materials;
+        mesh_assets = other.mesh_assets;
+        instances = other.instances;
+        default_mesh_id = other.default_mesh_id;
+        default_instance_id = other.default_instance_id;
+        lights = other.lights;
+        image_light_assets = other.image_light_assets;
+        camera = other.camera;
+        bounds = other.bounds;
+        revision = other.revision;
+        identity = next_scene_identity();
+        return *this;
+    }
+
+    Scene(Scene&& other) noexcept
+        : materials(std::move(other.materials)),
+          mesh_assets(std::move(other.mesh_assets)),
+          instances(std::move(other.instances)),
+          default_mesh_id(other.default_mesh_id),
+          default_instance_id(other.default_instance_id),
+          lights(std::move(other.lights)),
+          image_light_assets(std::move(other.image_light_assets)),
+          camera(other.camera),
+          bounds(other.bounds),
+          revision(other.revision),
+          identity(other.identity) {
+        other.identity = next_scene_identity();
+    }
+
+    Scene& operator=(Scene&& other) noexcept {
+        if (this == &other) return *this;
+        materials = std::move(other.materials);
+        mesh_assets = std::move(other.mesh_assets);
+        instances = std::move(other.instances);
+        default_mesh_id = other.default_mesh_id;
+        default_instance_id = other.default_instance_id;
+        lights = std::move(other.lights);
+        image_light_assets = std::move(other.image_light_assets);
+        camera = other.camera;
+        bounds = other.bounds;
+        revision = other.revision;
+        identity = other.identity;
+        other.identity = next_scene_identity();
+        return *this;
+    }
+
     std::vector<Material> materials;
     std::vector<SceneMesh> mesh_assets;
     std::vector<SceneInstance> instances;
@@ -80,10 +150,15 @@ struct Scene {
 
     AABB bounds;
     std::uint64_t revision = 0;
+    std::uint64_t identity = next_scene_identity();
 };
 
 LuxInline void mark_scene_modified(Scene& scene) {
     ++scene.revision;
+}
+
+LuxInline SceneStamp scene_stamp(const Scene& scene) {
+    return SceneStamp{scene.identity, scene.revision};
 }
 
 LuxInline vec3 image_asset_lookup_nearest(const SceneImageLightAsset& asset,

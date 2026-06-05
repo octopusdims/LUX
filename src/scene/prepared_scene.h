@@ -26,7 +26,7 @@ public:
     PreparedScene& operator=(PreparedScene&&) = delete;
 
     const Scene& host_scene() const;
-    const LightDistribution& light_distribution() const;
+    const PreparedLightSampling& light_sampling() const;
 
     void prepare_host_bvh() const;
     bool has_host_bvh() const;
@@ -42,7 +42,7 @@ private:
     void refresh_gpu_views();
 
     Scene scene_;
-    LightDistribution light_distribution_;
+    PreparedLightSampling light_sampling_;
     mutable CpuBvh cpu_bvh_;
     std::unique_ptr<PreparedSceneGpuStorage> gpu_;
     GpuScene gpu_scene_view_;
