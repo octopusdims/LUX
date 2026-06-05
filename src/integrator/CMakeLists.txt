@@ -17,24 +17,26 @@ if(LUX_BUILD_PATHGUIDE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pathguide/CMakeLi
     add_subdirectory(pathguide)
 endif()
 
-add_library(lux_wavefront STATIC
-    wavefront_kernels.cu
-    wavefront_pt.cu
-    wavefront_runtime.cu
-    wavefront_scheduler.cu
-)
-target_include_directories(lux_wavefront PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(lux_wavefront PUBLIC
-    lux_bvh
-    lux_scene
-    lux_film
-    lux_camera
-    lux_material
-    lux_light
-    lux_sampler
-    lux_core
-    lux_geometry
-)
+if(LUX_ENABLE_CUDA)
+    add_library(lux_wavefront STATIC
+        wavefront_kernels.cu
+        wavefront_pt.cu
+        wavefront_runtime.cu
+        wavefront_scheduler.cu
+    )
+    target_include_directories(lux_wavefront PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(lux_wavefront PUBLIC
+        lux_bvh
+        lux_scene
+        lux_film
+        lux_camera
+        lux_material
+        lux_light
+        lux_sampler
+        lux_core
+        lux_geometry
+    )
+endif()
 
 add_library(lux_integrator STATIC
     cpu_path_tracer.cpp
@@ -42,7 +44,6 @@ add_library(lux_integrator STATIC
 )
 target_include_directories(lux_integrator PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(lux_integrator PUBLIC
-    lux_wavefront
     lux_scene
     lux_bvh
     lux_sampler
@@ -52,6 +53,10 @@ target_link_libraries(lux_integrator PUBLIC
     lux_film
     lux_core
 )
+
+if(LUX_ENABLE_CUDA)
+    target_link_libraries(lux_integrator PUBLIC lux_wavefront)
+endif()
 
 if(TARGET lux_restir)
     target_link_libraries(lux_integrator PUBLIC lux_restir)

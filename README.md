@@ -26,11 +26,13 @@ algorithms and validation rather than engine-level infrastructure.
 
 - CMake 3.24 or newer.
 - A C++20 compiler.
-- CUDA Toolkit with an NVCC version that supports C++20 CUDA builds.
+- CUDA Toolkit with an NVCC version that supports C++20 CUDA builds when
+  `LUX_ENABLE_CUDA=ON`.
 - An NVIDIA GPU and working CUDA runtime for GPU rendering.
 
-The top-level CMake project enables both `CXX` and `CUDA`, so CUDA is required
-to configure the project even when you only plan to run the CPU renderer.
+CUDA is enabled by default. Configure with `-DLUX_ENABLE_CUDA=OFF` to build the
+CPU renderer, CPU diagnostics, OBJ/environment loaders, and CPU tests without a
+CUDA toolkit.
 
 ## Build
 
@@ -39,8 +41,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-By default, `CMAKE_CUDA_ARCHITECTURES` is set to `native`. If you need a
-specific target architecture, pass it explicitly:
+CPU-only build:
+
+```bash
+cmake -S . -B build-cpu -DCMAKE_BUILD_TYPE=Release -DLUX_ENABLE_CUDA=OFF
+cmake --build build-cpu -j
+```
+
+When CUDA is enabled, `CMAKE_CUDA_ARCHITECTURES` defaults to `native`. If you
+need a specific target architecture, pass it explicitly:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
@@ -106,6 +115,7 @@ Common options:
 | `-out name` | Write to `out/name/name.ppm`. |
 | `-output path` | Write to an exact `.ppm` or `.pfm` path. |
 | `-gpu` | Use the CUDA wavefront path tracer. |
+| `-light-sampler power\|uniform\|bvh` | Select the direct-light sampler strategy. Defaults to `power`; `bvh` is an experimental strategy. |
 | `-time` | Print stage timing breakdown. |
 | `-help` | Print all available options. |
 
